@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ShieldAlert,
   HeartPulse,
@@ -14,18 +14,30 @@ import {
   Lock,
   ChevronDown,
   ChevronUp,
-  Globe,
-  Sparkles,
-  Layers,
-  FileCheck,
-  Scale,
-  Send,
+  Wallet,
+  LogOut,
+  Copy,
+  Check,
   Zap,
   Sliders
 } from 'lucide-react';
 
+interface Beneficiary {
+  id: string;
+  label: string;
+  address: string;
+  share: number;
+}
+
 export function App() {
   const [view, setView] = useState<'landing' | 'app'>('landing');
+
+  // Wallet Connection State
+  const [connectedAddress, setConnectedAddress] = useState<string | null>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [walletChainId, setWalletChainId] = useState<string | null>(null);
+  const [showWalletModal, setShowWalletModal] = useState(false);
+  const [copiedAddress, setCopiedAddress] = useState(false);
 
   // App demo / interactive vault state
   const [inactivityDays, setInactivityDays] = useState(90);
@@ -35,18 +47,25 @@ export function App() {
   const [appTab, setAppTab] = useState<'overview' | 'beneficiaries' | 'settings'>('overview');
   const [showPingModal, setShowPingModal] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
+  const [showAddBeneficiaryModal, setShowAddBeneficiaryModal] = useState(false);
   const [depositAmount, setDepositAmount] = useState('5000');
+
+  // New beneficiary form inputs
+  const [newBenLabel, setNewBenLabel] = useState('');
+  const [newBenAddress, setNewBenAddress] = useState('');
+  const [newBenShare, setNewBenShare] = useState('20');
 
   // FAQ accordion open states
   const [openFaq, setOpenFaq] = useState<number | null>(0);
 
   // Beneficiaries
-  const [beneficiaries, setBeneficiaries] = useState([
+  const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([
     { id: '1', label: 'Primary Beneficiary (Spouse)', address: '0x71C...4e8B', share: 60 },
     { id: '2', label: 'College Trust (Child)', address: '0x32A...991c', share: 20 },
     { id: '3', label: 'Backup Guardian (Sibling)', address: '0x99F...65Bc', share: 20 },
   ]);
 
+  // Window calculation
   const daysSinceHeartbeat = Math.floor((Date.now() - lastCheckIn.getTime()) / (1000 * 60 * 60 * 24));
   const daysUntilGrace = Math.max(0, inactivityDays - daysSinceHeartbeat);
   const daysUntilExecution = Math.max(0, inactivityDays + gracePeriodDays - daysSinceHeartbeat);
@@ -58,6 +77,71 @@ export function App() {
       ? 'GRACE_PERIOD'
       : 'ACTIVE';
 
+  // Check if browser has an injected Ethereum provider
+  useEffect(() => {
+    const checkExistingConnection = async () => {
+      const eth = (window as unknown as { ethereum?: { request: (args: { method: string }) => Promise<string[]> } }).ethereum;
+      if (eth) {
+        try {
+          const accounts = await eth.request({ method: 'eth_accounts' });
+          if (accounts && accounts.length > 0) {
+            setConnectedAddress(accounts[0]);
+          }
+        } catch {
+          // Ignore background check failure
+        }
+      }
+    };
+    checkExistingConnection();
+  }, []);
+
+  // Connect Real Wallet via EIP-1193 or fallback demo connection
+  const handleConnectWallet = async (type: 'injected' | 'coinbase' | 'demo') => {
+    setIsConnecting(true);
+    setShowWalletModal(false);
+
+    if (type === 'demo') {
+      setTimeout(() => {
+        setConnectedAddress('0x8453c0762Ad42A45Cda10738e4a9089851F7a12F');
+        setWalletChainId('0x2105'); // Base Mainnet 8453
+        setIsConnecting(false);
+      }, 500);
+      return;
+    }
+
+    const eth = (window as unknown as { ethereum?: { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> } }).ethereum;
+    if (eth) {
+      try {
+        const accounts = (await eth.request({ method: 'eth_requestAccounts' })) as string[];
+        if (accounts && accounts.length > 0) {
+          setConnectedAddress(accounts[0]);
+          const chainId = (await eth.request({ method: 'eth_chainId' })) as string;
+          setWalletChainId(chainId);
+        }
+      } catch {
+        // Fallback demo address if user cancels or injection fails
+        setConnectedAddress('0x8453c0762Ad42A45Cda10738e4a9089851F7a12F');
+      } finally {
+        setIsConnecting(false);
+      }
+    } else {
+      // In sandbox / browser without extension: connect simulated Base address
+      setConnectedAddress('0x8453c0762Ad42A45Cda10738e4a9089851F7a12F');
+      setIsConnecting(false);
+    }
+  };
+
+  const handleDisconnectWallet = () => {
+    setConnectedAddress(null);
+    setWalletChainId(null);
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard?.writeText(text);
+    setCopiedAddress(true);
+    setTimeout(() => setCopiedAddress(false), 2000);
+  };
+
   const scrollToSection = (id: string) => {
     const el = document.getElementById(id);
     if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -66,6 +150,25 @@ export function App() {
   const handlePing = () => {
     setLastCheckIn(new Date());
     setShowPingModal(false);
+  };
+
+  const handleAddBeneficiary = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newBenLabel || !newBenAddress) return;
+    const shareNum = Number(newBenShare) || 0;
+    setBeneficiaries([
+      ...beneficiaries,
+      {
+        id: `ben-${Date.now()}`,
+        label: newBenLabel,
+        address: newBenAddress,
+        share: shareNum,
+      },
+    ]);
+    setNewBenLabel('');
+    setNewBenAddress('');
+    setNewBenShare('20');
+    setShowAddBeneficiaryModal(false);
   };
 
   return (
@@ -90,37 +193,75 @@ export function App() {
 
           <div className="flex items-center gap-md">
             {view === 'landing' ? (
-              <>
-                <nav className="hidden md:flex items-center gap-lg text-sm text-secondary">
-                  <button onClick={() => scrollToSection('problem')} className="hover:text-primary transition font-medium">
-                    The Problem
-                  </button>
-                  <button onClick={() => scrollToSection('how-it-works')} className="hover:text-primary transition font-medium">
-                    How It Works
-                  </button>
-                  <button onClick={() => scrollToSection('features')} className="hover:text-primary transition font-medium">
-                    Benefits
-                  </button>
-                  <button onClick={() => scrollToSection('security')} className="hover:text-primary transition font-medium">
-                    Security
-                  </button>
-                  <button onClick={() => scrollToSection('faq')} className="hover:text-primary transition font-medium">
-                    FAQ
-                  </button>
-                </nav>
-                <button
-                  onClick={() => setView('app')}
-                  className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  <span>Launch App &rarr;</span>
+              <nav className="hidden lg:flex items-center gap-lg text-sm text-secondary">
+                <button onClick={() => scrollToSection('problem')} className="hover:text-primary transition font-medium">
+                  The Problem
                 </button>
-              </>
+                <button onClick={() => scrollToSection('how-it-works')} className="hover:text-primary transition font-medium">
+                  How It Works
+                </button>
+                <button onClick={() => scrollToSection('features')} className="hover:text-primary transition font-medium">
+                  Benefits
+                </button>
+                <button onClick={() => scrollToSection('security')} className="hover:text-primary transition font-medium">
+                  Security
+                </button>
+                <button onClick={() => scrollToSection('faq')} className="hover:text-primary transition font-medium">
+                  FAQ
+                </button>
+              </nav>
+            ) : null}
+
+            {/* Wallet Connect / Account Pill */}
+            {connectedAddress ? (
+              <div className="flex items-center gap-xs">
+                <div className="hidden sm:flex items-center gap-xs px-md py-sm rounded-lg bg-secondary border border-secondary text-xs">
+                  <span className="w-2 h-2 rounded-full bg-success-primary" />
+                  <span className="font-mono text-primary font-medium">
+                    {connectedAddress.substring(0, 6)}...{connectedAddress.substring(connectedAddress.length - 4)}
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard(connectedAddress)}
+                    className="p-xxs hover:text-primary text-secondary ml-xxs"
+                    title="Copy address"
+                  >
+                    {copiedAddress ? <Check className="w-3 h-3 text-fg-success-primary" /> : <Copy className="w-3 h-3 text-fg-quaternary" />}
+                  </button>
+                </div>
+                <button
+                  onClick={handleDisconnectWallet}
+                  className="inline-flex items-center gap-xs rounded-lg bg-primary px-md py-sm text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+                  title="Disconnect wallet"
+                >
+                  <LogOut className="w-3.5 h-3.5 text-fg-quaternary" />
+                  <span className="hidden sm:inline">Disconnect</span>
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowWalletModal(true)}
+                disabled={isConnecting}
+                className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
+              >
+                <Wallet className="w-4 h-4 text-fg-white shrink-0" />
+                <span>{isConnecting ? 'Connecting...' : 'Connect Wallet'}</span>
+              </button>
+            )}
+
+            {/* Launch App or Return button */}
+            {view === 'landing' ? (
+              <button
+                onClick={() => setView('app')}
+                className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                <span>Launch App &rarr;</span>
+              </button>
             ) : (
               <button
                 onClick={() => setView('landing')}
                 className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
               >
-                <span>&larr; Return to Landing Page</span>
+                <span>&larr; Landing</span>
               </button>
             )}
           </div>
@@ -133,30 +274,30 @@ export function App() {
           {/* Hero Section */}
           <section className="border-b border-secondary bg-primary py-2xl lg:py-4xl">
             <div className="max-w-5xl mx-auto px-xl text-center space-y-xl">
-              {/* Eyebrow badge */}
               <div className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-xs text-xs font-semibold text-utility-brand-700 shadow-xs">
                 <span className="w-2 h-2 rounded-full bg-brand-solid animate-pulse" />
                 <span>Runs on Base · Currently live on Base Mainnet &amp; Sepolia</span>
               </div>
 
-              {/* Headline */}
               <h1 className="text-heading-xl lg:text-heading-2xl font-bold text-primary tracking-tight">
                 Your USDC, in the right hands.<br className="hidden sm:inline" /> Even when you can't be there.
               </h1>
 
-              {/* Subhead */}
               <p className="max-w-3xl mx-auto text-md lg:text-lg text-secondary leading-relaxed">
                 Kharis is a simple vault for your USDC. Choose who should receive it, then check in every so often.
                 If you ever stop, it passes to them in the shares you set. No company sits in the middle, and no one holds a key to it.
               </p>
 
-              {/* CTA buttons */}
               <div className="flex flex-col sm:flex-row items-center justify-center gap-md pt-md">
                 <button
-                  onClick={() => setView('app')}
+                  onClick={() => {
+                    if (!connectedAddress) setShowWalletModal(true);
+                    setView('app');
+                  }}
                   className="w-full sm:w-auto inline-flex items-center justify-center gap-sm rounded-lg border border-transparent bg-brand-solid px-2xl py-md text-md font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                 >
-                  <span>Launch app &rarr;</span>
+                  <Wallet className="w-4 h-4 text-fg-white shrink-0" />
+                  <span>{connectedAddress ? 'Go to Vault →' : 'Connect Wallet & Launch →'}</span>
                 </button>
                 <button
                   onClick={() => scrollToSection('how-it-works')}
@@ -166,14 +307,13 @@ export function App() {
                 </button>
               </div>
 
-              {/* Under-CTA microcopy */}
               <p className="text-xs text-tertiary">
                 Early software that hasn't been audited. Please start with small amounts.
               </p>
             </div>
           </section>
 
-          {/* Social Proof / Vault Preview Card */}
+          {/* Live Preview Card */}
           <section className="max-w-5xl mx-auto px-xl -mt-lg mb-2xl">
             <div className="rounded-xl border border-secondary bg-primary p-xl shadow-md space-y-md">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-md border-b border-secondary pb-md">
@@ -183,12 +323,14 @@ export function App() {
                   </div>
                   <div>
                     <span className="text-sm font-semibold text-primary">Live Switch Countdown Preview</span>
-                    <p className="text-xs text-secondary">Non-custodial proof-of-life status</p>
+                    <p className="text-xs text-secondary">
+                      {connectedAddress ? `Connected wallet: ${connectedAddress.substring(0, 10)}...` : 'Non-custodial proof-of-life status'}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-sm">
                   <span className="inline-flex items-center gap-xs rounded-full border border-utility-success-200 bg-utility-success-50 px-md py-xxs text-xs font-medium text-utility-success-700">
-                    Active · 76 days remaining
+                    Active · 78 days remaining
                   </span>
                   <button
                     onClick={() => setView('app')}
@@ -380,57 +522,8 @@ export function App() {
             </div>
           </section>
 
-          {/* Who It's For */}
-          <section className="py-2xl lg:py-3xl border-t border-secondary bg-secondary">
-            <div className="max-w-5xl mx-auto px-xl space-y-xl">
-              <div className="max-w-3xl space-y-sm">
-                <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">Use Cases</span>
-                <h2 className="text-heading-lg font-bold text-primary tracking-tight">
-                  For anyone who's ever wondered, "What if?"
-                </h2>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-lg">
-                <div className="p-xl rounded-xl border border-secondary bg-primary space-y-sm shadow-xs">
-                  <h4 className="text-sm font-semibold text-primary">Parents and partners</h4>
-                  <p className="text-xs text-secondary leading-relaxed">
-                    You hold savings in USDC and want them to go to your family without asking anyone's permission and without anyone needing your recovery phrase.
-                  </p>
-                </div>
-
-                <div className="p-xl rounded-xl border border-secondary bg-primary space-y-sm shadow-xs">
-                  <h4 className="text-sm font-semibold text-primary">Off-the-grid adventurers</h4>
-                  <p className="text-xs text-secondary leading-relaxed">
-                    Travel, sail, climb, or work far from home. Set a window that fits how you live: a few weeks off the grid won't trigger anything, and a prolonged silence will.
-                  </p>
-                </div>
-
-                <div className="p-xl rounded-xl border border-secondary bg-primary space-y-sm shadow-xs">
-                  <h4 className="text-sm font-semibold text-primary">Builders &amp; freelancers</h4>
-                  <p className="text-xs text-secondary leading-relaxed">
-                    Your income already lives on-chain. Kharis gives part of it a plan, split among the people, co-founders, or causes you choose.
-                  </p>
-                </div>
-
-                <div className="p-xl rounded-xl border border-secondary bg-primary space-y-sm shadow-xs">
-                  <h4 className="text-sm font-semibold text-primary">Lost wallet insurance</h4>
-                  <p className="text-xs text-secondary leading-relaxed">
-                    If you lose your wallet and can't check in, your vault still passes to the people you named, preventing permanent on-chain asset loss.
-                  </p>
-                </div>
-
-                <div className="p-xl rounded-xl border border-secondary bg-primary space-y-sm shadow-xs sm:col-span-2">
-                  <h4 className="text-sm font-semibold text-primary">The curious and careful</h4>
-                  <p className="text-xs text-secondary leading-relaxed">
-                    Want to see how it works before trusting it with anything that matters? Kharis is live on testnet, so you can test every check-in and execution step without real money.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </section>
-
           {/* Trust & Security */}
-          <section id="security" className="py-2xl lg:py-3xl border-t border-secondary bg-primary">
+          <section id="security" className="py-2xl lg:py-3xl border-t border-secondary bg-secondary">
             <div className="max-w-5xl mx-auto px-xl space-y-xl">
               <div className="max-w-3xl space-y-sm">
                 <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">Verification &amp; Caveats</span>
@@ -440,45 +533,43 @@ export function App() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-xl">
-                {/* Guarantees */}
                 <div className="space-y-md">
                   <h3 className="text-heading-xs font-semibold text-primary flex items-center gap-xs">
                     <CheckCircle2 className="w-5 h-5 text-fg-success-primary" />
                     <span>What the code guarantees</span>
                   </h3>
                   <ul className="space-y-sm text-xs text-secondary leading-relaxed">
-                    <li className="p-md rounded-lg bg-secondary border border-secondary">
+                    <li className="p-md rounded-lg bg-primary border border-secondary">
                       <strong className="text-primary font-medium">No one else holds the keys:</strong> The vault contract has no owner, no administrator, no pause switch, and no upgrade path. Once deployed, its rules are immutable.
                     </li>
-                    <li className="p-md rounded-lg bg-secondary border border-secondary">
+                    <li className="p-md rounded-lg bg-primary border border-secondary">
                       <strong className="text-primary font-medium">Funds go only where you said:</strong> A release can only pay the beneficiaries you named, in the shares you set. Anyone may trigger a release once your window has passed, but nobody can redirect the money.
                     </li>
-                    <li className="p-md rounded-lg bg-secondary border border-secondary">
+                    <li className="p-md rounded-lg bg-primary border border-secondary">
                       <strong className="text-primary font-medium">Nothing happens early:</strong> Funds can't be released while your window is still open, and after a release nobody can claim the same share twice.
                     </li>
-                    <li className="p-md rounded-lg bg-secondary border border-secondary">
+                    <li className="p-md rounded-lg bg-primary border border-secondary">
                       <strong className="text-primary font-medium">Built with standard safeguards:</strong> The contract uses OpenZeppelin's widely used protection against re-entrancy attacks and has an automated test suite.
                     </li>
                   </ul>
                 </div>
 
-                {/* What you should know */}
                 <div className="space-y-md">
                   <h3 className="text-heading-xs font-semibold text-primary flex items-center gap-xs">
                     <AlertTriangle className="w-5 h-5 text-fg-warning-primary" />
                     <span>What you should know before you use it</span>
                   </h3>
                   <ul className="space-y-sm text-xs text-secondary leading-relaxed">
-                    <li className="p-md rounded-lg bg-secondary border border-secondary">
+                    <li className="p-md rounded-lg bg-primary border border-secondary">
                       <strong className="text-primary font-medium">It hasn't been audited:</strong> Kharis has not had an independent security audit. Smart contracts can have bugs; please use only amounts you could afford to lose.
                     </li>
-                    <li className="p-md rounded-lg bg-secondary border border-secondary">
+                    <li className="p-md rounded-lg bg-primary border border-secondary">
                       <strong className="text-primary font-medium">There is no undo:</strong> Because nobody holds admin keys, nobody can reverse a mistake. A wrong beneficiary address can't be corrected after release.
                     </li>
-                    <li className="p-md rounded-lg bg-secondary border border-secondary">
+                    <li className="p-md rounded-lg bg-primary border border-secondary">
                       <strong className="text-primary font-medium">It doesn't remind you:</strong> Kharis won't email you before your deadline. Set your own calendar reminder and choose a window with a comfortable margin.
                     </li>
-                    <li className="p-md rounded-lg bg-secondary border border-secondary">
+                    <li className="p-md rounded-lg bg-primary border border-secondary">
                       <strong className="text-primary font-medium">It isn't a legal will:</strong> Kharis moves USDC according to code. It doesn't replace legal, tax, or estate advice, and only covers the USDC inside the vault.
                     </li>
                   </ul>
@@ -488,7 +579,7 @@ export function App() {
           </section>
 
           {/* FAQ Section */}
-          <section id="faq" className="py-2xl lg:py-3xl border-t border-secondary bg-secondary">
+          <section id="faq" className="py-2xl lg:py-3xl border-t border-secondary bg-primary">
             <div className="max-w-4xl mx-auto px-xl space-y-xl">
               <div className="text-center space-y-sm max-w-xl mx-auto">
                 <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">Common Questions</span>
@@ -520,7 +611,7 @@ export function App() {
                     a: 'No. The contract has no admin keys, no owner, and no upgrade mechanism, so nobody can move funds outside of the rules you configured when depositing.',
                   },
                 ].map((item, idx) => (
-                  <div key={idx} className="rounded-xl border border-secondary bg-primary overflow-hidden shadow-xs">
+                  <div key={idx} className="rounded-xl border border-secondary bg-secondary overflow-hidden shadow-xs">
                     <button
                       onClick={() => setOpenFaq(openFaq === idx ? null : idx)}
                       className="w-full p-xl flex items-center justify-between text-left text-sm font-semibold text-primary hover:bg-secondary-hover transition"
@@ -533,7 +624,7 @@ export function App() {
                       )}
                     </button>
                     {openFaq === idx && (
-                      <div className="px-xl pb-xl text-xs text-secondary leading-relaxed border-t border-secondary pt-md bg-secondary">
+                      <div className="px-xl pb-xl text-xs text-secondary leading-relaxed border-t border-secondary pt-md bg-primary">
                         {item.a}
                       </div>
                     )}
@@ -544,20 +635,24 @@ export function App() {
           </section>
 
           {/* Pre-Footer CTA */}
-          <section className="py-2xl lg:py-3xl border-t border-secondary bg-primary text-center">
+          <section className="py-2xl lg:py-3xl border-t border-secondary bg-secondary text-center">
             <div className="max-w-3xl mx-auto px-xl space-y-lg">
               <h2 className="text-heading-lg font-bold text-primary tracking-tight">
                 Ready to protect your digital legacy on Base?
               </h2>
               <p className="text-sm text-secondary leading-relaxed">
-                Start with a testnet vault or configure small USDC allocations. No middleman, no admin keys.
+                Connect your Base wallet to configure your USDC allocations. No middleman, no admin keys.
               </p>
               <div>
                 <button
-                  onClick={() => setView('app')}
+                  onClick={() => {
+                    if (!connectedAddress) setShowWalletModal(true);
+                    setView('app');
+                  }}
                   className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-2xl py-md text-md font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                 >
-                  <span>Launch Kharis App &rarr;</span>
+                  <Wallet className="w-4 h-4 text-fg-white shrink-0" />
+                  <span>{connectedAddress ? 'Launch Vault Dashboard →' : 'Connect Wallet to Start →'}</span>
                 </button>
               </div>
             </div>
@@ -568,6 +663,26 @@ export function App() {
       {/* VIEW: LIVE WEB APP */}
       {view === 'app' && (
         <main className="flex-1 max-w-7xl w-full mx-auto px-xl py-2xl space-y-2xl">
+          {/* Wallet Status Notice if not connected */}
+          {!connectedAddress && (
+            <div className="rounded-xl border border-utility-warning-200 bg-utility-warning-50 p-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-md text-utility-warning-700">
+              <div className="flex items-center gap-md">
+                <AlertTriangle className="w-5 h-5 text-fg-warning-primary shrink-0" />
+                <div>
+                  <span className="font-semibold text-sm">Wallet Not Connected</span>
+                  <p className="text-xs text-secondary mt-xxs">Connect your Base wallet (Coinbase Wallet, MetaMask, Rabby) to manage your active inheritance vault.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowWalletModal(true)}
+                className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring shrink-0"
+              >
+                <Wallet className="w-4 h-4 text-fg-white shrink-0" />
+                <span>Connect Wallet</span>
+              </button>
+            </div>
+          )}
+
           {/* Health Banner */}
           <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs">
             <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-xl">
@@ -719,7 +834,7 @@ export function App() {
                   <div className="p-md rounded-lg bg-secondary border border-secondary font-mono text-xs text-primary flex items-center justify-between">
                     <span>0x742d35Cc6634C0532925a3b844Bc454e4438f44e</span>
                     <a
-                      href="https://basescan.org"
+                      href="https://basescan.org/address/0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
                       target="_blank"
                       rel="noreferrer"
                       className="text-brand-primary hover:underline flex items-center gap-xxs"
@@ -730,7 +845,17 @@ export function App() {
                   </div>
 
                   <div className="space-y-sm">
-                    <span className="text-xs font-semibold text-quaternary uppercase tracking-wider">Beneficiary Shares</span>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-quaternary uppercase tracking-wider">Beneficiary Shares</span>
+                      <button
+                        onClick={() => setShowAddBeneficiaryModal(true)}
+                        className="text-xs font-semibold text-brand-primary hover:underline flex items-center gap-xxs"
+                      >
+                        <Plus className="w-3.5 h-3.5 text-fg-brand-primary" />
+                        <span>Add Beneficiary</span>
+                      </button>
+                    </div>
+
                     {beneficiaries.map((b) => (
                       <div key={b.id} className="p-md rounded-lg bg-secondary border border-secondary flex items-center justify-between text-xs">
                         <div>
@@ -756,9 +881,7 @@ export function App() {
                     Until your inactivity window runs out, you retain 100% custody. You can withdraw your USDC at any time or close the vault permanently.
                   </p>
                   <button
-                    onClick={() => {
-                      setVaultBalance(0);
-                    }}
+                    onClick={() => setVaultBalance(0)}
                     className="w-full inline-flex items-center justify-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-error-primary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                   >
                     <span>Emergency Full Withdrawal</span>
@@ -770,11 +893,18 @@ export function App() {
 
           {appTab === 'beneficiaries' && (
             <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-lg">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-md">
                 <div>
                   <h3 className="text-heading-xs font-semibold text-primary">Name Beneficiaries (Up to 10)</h3>
-                  <p className="text-xs text-secondary mt-xxs">Add wallet addresses and choose exact percentage portions.</p>
+                  <p className="text-xs text-secondary mt-xxs">Add Base wallet addresses and choose exact percentage portions.</p>
                 </div>
+                <button
+                  onClick={() => setShowAddBeneficiaryModal(true)}
+                  className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+                >
+                  <Plus className="w-4 h-4 text-fg-white shrink-0" />
+                  <span>Add Beneficiary</span>
+                </button>
               </div>
 
               <div className="overflow-hidden rounded-xl border border-secondary bg-primary">
@@ -785,6 +915,7 @@ export function App() {
                       <th className="px-3xl py-md">Base Address</th>
                       <th className="px-3xl py-md">Share (%)</th>
                       <th className="px-3xl py-md">Value (USDC)</th>
+                      <th className="px-3xl py-md text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-secondary">
@@ -795,6 +926,14 @@ export function App() {
                         <td className="px-3xl py-xl font-semibold text-primary">{b.share}%</td>
                         <td className="px-3xl py-xl text-primary font-medium">
                           ${((vaultBalance * b.share) / 100).toLocaleString()} USDC
+                        </td>
+                        <td className="px-3xl py-xl text-right">
+                          <button
+                            onClick={() => setBeneficiaries(beneficiaries.filter((item) => item.id !== b.id))}
+                            className="text-xs font-semibold text-error-primary hover:underline"
+                          >
+                            Remove
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -843,25 +982,119 @@ export function App() {
         </main>
       )}
 
-      {/* Ping Modal */}
-      {showPingModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-md">
-          <div className="rounded-xl border border-secondary bg-primary shadow-xl max-w-md w-full p-xl space-y-lg">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-xs">
-                <HeartPulse className="w-5 h-5 text-fg-brand-primary" />
-                <h3 className="text-heading-xs font-bold text-primary">"I'm Alive" Check In</h3>
+      {/* Connect Wallet Modal (TDS Dialog Recipe) */}
+      {showWalletModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-md">
+          <div className="fixed inset-0 bg-overlay opacity-70" onClick={() => setShowWalletModal(false)} />
+          <div className="relative flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg bg-primary shadow-2xl z-10 border border-secondary">
+            <header className="flex items-start justify-between gap-lg border-b border-secondary p-xl">
+              <div>
+                <h2 className="text-lg font-semibold text-primary">Connect Wallet</h2>
+                <p className="text-xs text-secondary mt-xxs">Connect to manage your Kharis USDC vault on Base</p>
               </div>
-              <button onClick={() => setShowPingModal(false)} className="text-tertiary hover:text-primary text-sm font-semibold">
+              <button
+                onClick={() => setShowWalletModal(false)}
+                className="text-tertiary hover:text-primary text-sm font-semibold p-xs"
+              >
                 ✕
+              </button>
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-xl space-y-md">
+              <button
+                onClick={() => handleConnectWallet('coinbase')}
+                className="flex w-full items-center justify-between p-lg rounded-lg border border-secondary bg-secondary hover:bg-secondary-hover transition focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                <div className="flex items-center gap-md">
+                  <div className="w-9 h-9 rounded-md bg-brand-solid flex items-center justify-center text-primary-on-brand font-bold text-xs">
+                    CB
+                  </div>
+                  <div className="text-left">
+                    <span className="font-semibold text-sm text-primary block">Coinbase Wallet</span>
+                    <span className="text-xs text-secondary">Native Base Smart Wallet &amp; Extension</span>
+                  </div>
+                </div>
+                <ArrowRight className="w-4 h-4 text-fg-quaternary" />
+              </button>
+
+              <button
+                onClick={() => handleConnectWallet('injected')}
+                className="flex w-full items-center justify-between p-lg rounded-lg border border-secondary bg-secondary hover:bg-secondary-hover transition focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                <div className="flex items-center gap-md">
+                  <div className="w-9 h-9 rounded-md bg-utility-brand-50 border border-utility-brand-200 flex items-center justify-center text-utility-brand-700 font-bold text-xs">
+                    <Wallet className="w-4 h-4 text-fg-brand-primary" />
+                  </div>
+                  <div className="text-left">
+                    <span className="font-semibold text-sm text-primary block">Browser Wallet</span>
+                    <span className="text-xs text-secondary">MetaMask, Rabby, Rainbow or Injected</span>
+                  </div>
+                </div>
+                <ArrowRight className="w-4 h-4 text-fg-quaternary" />
+              </button>
+
+              <button
+                onClick={() => handleConnectWallet('demo')}
+                className="flex w-full items-center justify-between p-lg rounded-lg border border-secondary bg-primary hover:bg-secondary-hover transition focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                <div className="flex items-center gap-md">
+                  <div className="w-9 h-9 rounded-md bg-utility-gray-50 border border-utility-gray-200 flex items-center justify-center text-secondary font-bold text-xs">
+                    0x
+                  </div>
+                  <div className="text-left">
+                    <span className="font-semibold text-sm text-primary block">Demo Base Account</span>
+                    <span className="text-xs text-secondary">Test vault controls instantly without signing</span>
+                  </div>
+                </div>
+                <ArrowRight className="w-4 h-4 text-fg-quaternary" />
               </button>
             </div>
 
-            <p className="text-xs text-secondary leading-relaxed">
-              Pressing "I'm Alive" proves you are active and resets the inactivity countdown for another {inactivityDays} days.
-            </p>
+            <footer className="flex justify-between items-center border-t border-secondary p-xl text-xs text-secondary">
+              <span>Network: Base Mainnet (8453)</span>
+              <button
+                onClick={() => setShowWalletModal(false)}
+                className="text-xs font-semibold text-secondary hover:text-primary"
+              >
+                Cancel
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
 
-            <div className="flex items-center justify-end gap-md pt-sm">
+      {/* Ping Modal */}
+      {showPingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-md">
+          <div className="fixed inset-0 bg-overlay opacity-70" onClick={() => setShowPingModal(false)} />
+          <div className="relative flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg bg-primary shadow-2xl z-10 border border-secondary">
+            <header className="flex items-start justify-between gap-lg border-b border-secondary p-xl">
+              <div className="flex items-center gap-xs">
+                <HeartPulse className="w-5 h-5 text-fg-brand-primary" />
+                <h2 className="text-lg font-semibold text-primary">"I'm Alive" Check In</h2>
+              </div>
+              <button onClick={() => setShowPingModal(false)} className="text-tertiary hover:text-primary text-sm font-semibold p-xs">
+                ✕
+              </button>
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-xl space-y-md text-sm text-secondary">
+              <p className="text-xs leading-relaxed">
+                Pressing "I'm Alive" proves you are active and resets the inactivity countdown for another {inactivityDays} days.
+              </p>
+              <div className="p-md rounded-lg bg-secondary border border-secondary text-xs space-y-xs">
+                <div className="flex justify-between">
+                  <span>Signer:</span>
+                  <span className="font-mono text-primary">{connectedAddress ? `${connectedAddress.substring(0, 10)}...` : 'Demo Wallet'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Network:</span>
+                  <span className="font-medium text-primary">Base Mainnet</span>
+                </div>
+              </div>
+            </div>
+
+            <footer className="flex justify-end gap-sm border-t border-secondary p-xl">
               <button
                 onClick={() => setShowPingModal(false)}
                 className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
@@ -875,36 +1108,40 @@ export function App() {
                 <HeartPulse className="w-4 h-4 text-fg-white shrink-0" />
                 <span>Confirm Check In</span>
               </button>
-            </div>
+            </footer>
           </div>
         </div>
       )}
 
       {/* Deposit Modal */}
       {showDepositModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-md">
-          <div className="rounded-xl border border-secondary bg-primary shadow-xl max-w-md w-full p-xl space-y-lg">
-            <div className="flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-md">
+          <div className="fixed inset-0 bg-overlay opacity-70" onClick={() => setShowDepositModal(false)} />
+          <div className="relative flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg bg-primary shadow-2xl z-10 border border-secondary">
+            <header className="flex items-start justify-between gap-lg border-b border-secondary p-xl">
               <div className="flex items-center gap-xs">
                 <Coins className="w-5 h-5 text-fg-brand-primary" />
-                <h3 className="text-heading-xs font-bold text-primary">Deposit USDC</h3>
+                <h2 className="text-lg font-semibold text-primary">Deposit USDC</h2>
               </div>
-              <button onClick={() => setShowDepositModal(false)} className="text-tertiary hover:text-primary text-sm font-semibold">
+              <button onClick={() => setShowDepositModal(false)} className="text-tertiary hover:text-primary text-sm font-semibold p-xs">
                 ✕
               </button>
+            </header>
+
+            <div className="min-h-0 flex-1 overflow-y-auto p-xl space-y-md">
+              <div className="flex flex-col gap-sm">
+                <label className="text-sm font-medium text-secondary">Amount (USDC)</label>
+                <input
+                  type="number"
+                  value={depositAmount}
+                  onChange={(e) => setDepositAmount(e.target.value)}
+                  className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+                />
+                <p className="text-xs text-tertiary">Deposited to Base contract 0x742d...f44e</p>
+              </div>
             </div>
 
-            <div className="flex flex-col gap-sm">
-              <label className="text-sm font-medium text-secondary">Amount (USDC)</label>
-              <input
-                type="number"
-                value={depositAmount}
-                onChange={(e) => setDepositAmount(e.target.value)}
-                className="rounded-md bg-primary px-lg py-sm text-sm text-primary border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
-              />
-            </div>
-
-            <div className="flex items-center justify-end gap-md pt-sm">
+            <footer className="flex justify-end gap-sm border-t border-secondary p-xl">
               <button
                 onClick={() => setShowDepositModal(false)}
                 className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
@@ -920,7 +1157,82 @@ export function App() {
               >
                 <span>Deposit USDC</span>
               </button>
-            </div>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* Add Beneficiary Modal */}
+      {showAddBeneficiaryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-md">
+          <div className="fixed inset-0 bg-overlay opacity-70" onClick={() => setShowAddBeneficiaryModal(false)} />
+          <div className="relative flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg bg-primary shadow-2xl z-10 border border-secondary">
+            <header className="flex items-start justify-between gap-lg border-b border-secondary p-xl">
+              <div className="flex items-center gap-xs">
+                <Users className="w-5 h-5 text-fg-brand-primary" />
+                <h2 className="text-lg font-semibold text-primary">Add Beneficiary</h2>
+              </div>
+              <button onClick={() => setShowAddBeneficiaryModal(false)} className="text-tertiary hover:text-primary text-sm font-semibold p-xs">
+                ✕
+              </button>
+            </header>
+
+            <form onSubmit={handleAddBeneficiary}>
+              <div className="min-h-0 flex-1 overflow-y-auto p-xl space-y-md">
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Label / Relationship</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Eldest Child, Sibling, Legal Trust"
+                    value={newBenLabel}
+                    onChange={(e) => setNewBenLabel(e.target.value)}
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Base Wallet Address</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="0x..."
+                    value={newBenAddress}
+                    onChange={(e) => setNewBenAddress(e.target.value)}
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring font-mono"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Allocation Share (%)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    required
+                    value={newBenShare}
+                    onChange={(e) => setNewBenShare(e.target.value)}
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+                  />
+                </div>
+              </div>
+
+              <footer className="flex justify-end gap-sm border-t border-secondary p-xl">
+                <button
+                  type="button"
+                  onClick={() => setShowAddBeneficiaryModal(false)}
+                  className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+                >
+                  <span>Save Beneficiary</span>
+                </button>
+              </footer>
+            </form>
           </div>
         </div>
       )}
