@@ -22,3 +22,4 @@ pnpm-debug.log*
 # and the docs MCP server so an export keeps working in an external agent.
 .scaffolded
 .opencode/
+.vercel

@@ -1,6 +1,6 @@
 import express from 'express'
-import suiRoutes from '../server/routes/sui.mjs'
-import { credentialGuard } from '../server/credential-guard.mjs'
+import suiRoutes from './routes/sui.mjs'
+import { credentialGuard } from './credential-guard.mjs'
 
 const app = express()
 app.use(express.json())
