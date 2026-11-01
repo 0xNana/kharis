@@ -1,44 +1,61 @@
 # Kharis
 
-Kharis is a Sui-based legacy-planning app for setting a vault check-in schedule and choosing beneficiaries. The public landing page is at `/`; the workspace is at `/app`.
+Kharis is a Sui-based legacy-planning app. Create a vault, set a check-in schedule, and choose beneficiaries. Walrus Memory is in progress and will keep notes separate from the vault.
 
-## Current status
+**Status:** Sui Testnet. The vault contract has not been independently audited. Do not use real or valuable assets.
 
-- The vault package is published on Sui Testnet. It has not been independently audited; never use real or valuable assets.
-- Vault actions require wallet approval and are Testnet-only. They can be enabled for local development with `VITE_SUI_TESTNET_TRANSACTIONS_ENABLED=true`; production builds keep them disabled.
-- Walrus Memory is in progress. When enabled, notes stay separate from the vault; the Walrus service can read note content before encryption. Do not save sensitive information.
-- Mainnet vault actions are not available.
+## Features
 
-## Run locally
+- Connect a Sui wallet and view its address and SUI balance.
+- Create and manage a Testnet vault, check in, and set beneficiary shares.
+- Review the published [Sui Testnet contract](https://suiscan.xyz/testnet/object/0x9c87cf7116c2302ee1ad8fe5903d4f4ce957656b0fbcf9718319e45c30855ed0).
+- Explore the Walrus Memory experience as it is developed.
 
-Requires Node.js 24.22.1 or newer and npm.
+Vault transactions require wallet approval, are Testnet-only, and are disabled in production builds. Mainnet vault actions are unavailable. Never deposit valuable assets.
 
-```sh
+## Tech stack
+
+- React, TypeScript, and Vite
+- Express API for local development
+- Sui dApp Kit and Move
+- Vercel static deployment and serverless API
+- Walrus Memory
+
+## Getting started
+
+Requirements: Node.js 24.22.1 or later, npm, and a Sui-compatible browser wallet for wallet features.
+
+```bash
 npm install
 npm run dev
 ```
 
-The app runs at `http://localhost:3000`. To check the frontend:
+Open [http://localhost:3000](http://localhost:3000). The landing page is `/`; the app is at `/app`.
 
-```sh
+## Configuration
+
+Set environment variables in your local environment or deployment settings. Do not commit credentials or expose API keys through `VITE_*` variables.
+
+| Variable | Purpose |
+| --- | --- |
+| `MAINNET_TATUM_API_KEY` | Enables Sui Mainnet balance reads through Tatum. |
+| `VITE_WALRUS_MEMORY_ENABLED=true` | Enables the Walrus Memory experience at build time. |
+| `VITE_SUI_TESTNET_TRANSACTIONS_ENABLED=true` | Enables wallet-approved Testnet vault actions during local development only. Production builds keep vault actions disabled. |
+
+Testnet balance reads use Sui's public gRPC endpoint. Walrus services may read note content before encryption; do not save sensitive information.
+
+## Development
+
+```bash
 npm run typecheck
 npm run build
-```
-
-To run the Move contract tests, install the Sui CLI and run:
-
-```sh
 sui move test --path move/kharis_vault
 ```
 
-## Environment
-
-Keep credentials in server-side environment variables, never in source control or `VITE_*` variables.
-
-- `MAINNET_TATUM_API_KEY` enables Sui Mainnet balance reads through Tatum. Testnet reads use Sui's public gRPC endpoint.
-- `VITE_WALRUS_MEMORY_ENABLED=true` enables the Walrus Memory experience at build time.
-- `VITE_SUI_TESTNET_TRANSACTIONS_ENABLED=true` enables wallet-approved Testnet vault actions in local development only; it has no effect in production.
+The Sui CLI is required to build or test the Move package.
 
 ## Deployment
 
-The frontend is built with Vite and the Sui API is served by Vercel functions in `api/`. Connect this GitHub repository to Vercel and configure any required environment variables in the Vercel project settings. Do not deploy the vault to Mainnet before an independent audit and complete Testnet transaction testing.
+The frontend is built with Vite. Vercel serves the static site and API functions; the Vercel project should use Node.js 24 and have any required server-side environment variables configured in its project settings.
+
+The vault contract is Testnet-only and unaudited. Complete an independent security audit and thorough Testnet transaction testing before considering any Mainnet deployment.
