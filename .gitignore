@@ -1,10 +1,21 @@
 # node_modules is a mounted volume (see workload.go), never project source.
 node_modules/
 dist/
+coverage/
+.vercel/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 # Secrets never enter history — /creds is outside the work tree already, but
 # agents write .env files into the project when asked to configure things.
 .env
 .env.*
+!.env.example
+# Local editor and operating-system files.
+.DS_Store
+*.swp
+*.swo
 # Platform markers and harness internals — not the user's source. (The bridge's
 # file routes hide every dotfile, these included.)
 # .claude/ and .mcp.json are deliberately NOT listed: they carry the Tatum skills

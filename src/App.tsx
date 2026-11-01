@@ -1,1257 +1,848 @@
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react'
+import type { MouseEvent } from 'react'
 import {
-  ShieldAlert,
-  HeartPulse,
-  Users,
-  Clock,
-  Coins,
-  CheckCircle2,
-  AlertTriangle,
+  ArrowLeft,
   ArrowRight,
-  Plus,
-  RefreshCw,
-  ExternalLink,
-  Lock,
+  BookOpen,
   ChevronDown,
-  ChevronUp,
+  Clock3,
+  ExternalLink,
+  Home,
+  LockKeyhole,
+  Settings,
+  ShieldCheck,
+  Users,
   Wallet,
-  LogOut,
-  Copy,
-  Check,
-  Zap,
-  Sliders
-} from 'lucide-react';
+} from 'lucide-react'
+import {
+  useCurrentAccount,
+  useCurrentNetwork,
+  useDAppKit,
+} from '@mysten/dapp-kit-react'
+import { ConnectButton } from '@mysten/dapp-kit-react/ui'
+import WalrusMemory from './WalrusMemory'
+import VaultManager from './VaultManager'
 
-interface Beneficiary {
-  id: string;
-  label: string;
-  address: string;
-  share: number;
+type SuiNetwork = 'testnet' | 'mainnet'
+type WorkspacePage = 'overview' | 'vault' | 'beneficiaries' | 'memory' | 'settings'
+
+interface BalanceResponse {
+  address: string
+  network: SuiNetwork
+  coinType: string
+  totalBalanceMist: string
 }
 
-export function App() {
-  const [view, setView] = useState<'landing' | 'app'>('landing');
+const TESTNET_PACKAGE_ID =
+  '0x9c87cf7116c2302ee1ad8fe5903d4f4ce957656b0fbcf9718319e45c30855ed0'
+const TESTNET_PACKAGE_URL = `https://suiscan.xyz/testnet/object/${TESTNET_PACKAGE_ID}`
 
-  // Wallet Connection State
-  const [connectedAddress, setConnectedAddress] = useState<string | null>(null);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [walletChainId, setWalletChainId] = useState<string | null>(null);
-  const [showWalletModal, setShowWalletModal] = useState(false);
-  const [copiedAddress, setCopiedAddress] = useState(false);
+const navigation: {
+  id: WorkspacePage
+  label: string
+  path: string
+  icon: typeof Home
+}[] = [
+  { id: 'overview', label: 'Overview', path: '/app', icon: Home },
+  { id: 'vault', label: 'Your vault', path: '/app/vault', icon: LockKeyhole },
+  { id: 'beneficiaries', label: 'Beneficiaries', path: '/app/beneficiaries', icon: Users },
+  { id: 'memory', label: 'Memory', path: '/app/memory', icon: BookOpen },
+  { id: 'settings', label: 'Settings', path: '/app/settings', icon: Settings },
+]
 
-  // App demo / interactive vault state
-  const [inactivityDays, setInactivityDays] = useState(90);
-  const [gracePeriodDays, setGracePeriodDays] = useState(14);
-  const [lastCheckIn, setLastCheckIn] = useState<Date>(new Date(Date.now() - 1000 * 60 * 60 * 24 * 12));
-  const [vaultBalance, setVaultBalance] = useState(25000);
-  const [appTab, setAppTab] = useState<'overview' | 'beneficiaries' | 'settings'>('overview');
-  const [showPingModal, setShowPingModal] = useState(false);
-  const [showDepositModal, setShowDepositModal] = useState(false);
-  const [showAddBeneficiaryModal, setShowAddBeneficiaryModal] = useState(false);
-  const [depositAmount, setDepositAmount] = useState('5000');
+const pageDetails: Record<WorkspacePage, { title: string; description?: string }> = {
+  overview: {
+    title: 'Overview',
+  },
+  vault: {
+    title: 'Your vault',
+    description: 'Set your check-in schedule and manage your vault.',
+  },
+  beneficiaries: {
+    title: 'Beneficiaries',
+    description: 'Choose who receives your assets and how they are shared.',
+  },
+  memory: {
+    title: 'Memory',
+    description: 'Save and find the notes you choose to remember.',
+  },
+  settings: {
+    title: 'Settings',
+    description: 'Choose a network for your account balance.',
+  },
+}
 
-  // New beneficiary form inputs
-  const [newBenLabel, setNewBenLabel] = useState('');
-  const [newBenAddress, setNewBenAddress] = useState('');
-  const [newBenShare, setNewBenShare] = useState('20');
+function getPage(pathname: string): WorkspacePage {
+  const page = navigation.find((item) => item.path === pathname)
+  return page?.id ?? 'overview'
+}
 
-  // FAQ accordion open states
-  const [openFaq, setOpenFaq] = useState<number | null>(0);
+function navigate(event: MouseEvent<HTMLAnchorElement>, path: string) {
+  if (
+    event.defaultPrevented ||
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return
+  }
 
-  // Beneficiaries
-  const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([
-    { id: '1', label: 'Primary Beneficiary (Spouse)', address: '0x71C...4e8B', share: 60 },
-    { id: '2', label: 'College Trust (Child)', address: '0x32A...991c', share: 20 },
-    { id: '3', label: 'Backup Guardian (Sibling)', address: '0x99F...65Bc', share: 20 },
-  ]);
+  event.preventDefault()
+  if (window.location.pathname !== path) {
+    window.history.pushState({}, '', path)
+    window.dispatchEvent(new PopStateEvent('popstate'))
+  }
+}
 
-  // Window calculation
-  const daysSinceHeartbeat = Math.floor((Date.now() - lastCheckIn.getTime()) / (1000 * 60 * 60 * 24));
-  const daysUntilGrace = Math.max(0, inactivityDays - daysSinceHeartbeat);
-  const daysUntilExecution = Math.max(0, inactivityDays + gracePeriodDays - daysSinceHeartbeat);
+function formatSui(mist: string) {
+  const amount = BigInt(mist)
+  const whole = amount / 1_000_000_000n
+  const fraction = (amount % 1_000_000_000n).toString().padStart(9, '0').replace(/0+$/, '')
+  return fraction ? `${whole}.${fraction}` : whole.toString()
+}
 
-  const switchStatus =
-    daysSinceHeartbeat >= inactivityDays + gracePeriodDays
-      ? 'TRIGGERED'
-      : daysSinceHeartbeat >= inactivityDays
-      ? 'GRACE_PERIOD'
-      : 'ACTIVE';
+function shortAddress(address: string) {
+  return `${address.slice(0, 6)}...${address.slice(-4)}`
+}
 
-  // Check if browser has an injected Ethereum provider
-  useEffect(() => {
-    const checkExistingConnection = async () => {
-      const eth = (window as unknown as { ethereum?: { request: (args: { method: string }) => Promise<string[]> } }).ethereum;
-      if (eth) {
-        try {
-          const accounts = await eth.request({ method: 'eth_accounts' });
-          if (accounts && accounts.length > 0) {
-            setConnectedAddress(accounts[0]);
-          }
-        } catch {
-          // Ignore background check failure
-        }
-      }
-    };
-    checkExistingConnection();
-  }, []);
-
-  // Connect Real Wallet via EIP-1193 or fallback demo connection
-  const handleConnectWallet = async (type: 'injected' | 'coinbase' | 'demo') => {
-    setIsConnecting(true);
-    setShowWalletModal(false);
-
-    if (type === 'demo') {
-      setTimeout(() => {
-        setConnectedAddress('0x8453c0762Ad42A45Cda10738e4a9089851F7a12F');
-        setWalletChainId('0x2105'); // Base Mainnet 8453
-        setIsConnecting(false);
-      }, 500);
-      return;
-    }
-
-    const eth = (window as unknown as { ethereum?: { request: (args: { method: string; params?: unknown[] }) => Promise<unknown> } }).ethereum;
-    if (eth) {
-      try {
-        const accounts = (await eth.request({ method: 'eth_requestAccounts' })) as string[];
-        if (accounts && accounts.length > 0) {
-          setConnectedAddress(accounts[0]);
-          const chainId = (await eth.request({ method: 'eth_chainId' })) as string;
-          setWalletChainId(chainId);
-        }
-      } catch {
-        // Fallback demo address if user cancels or injection fails
-        setConnectedAddress('0x8453c0762Ad42A45Cda10738e4a9089851F7a12F');
-      } finally {
-        setIsConnecting(false);
-      }
-    } else {
-      // In sandbox / browser without extension: connect simulated Base address
-      setConnectedAddress('0x8453c0762Ad42A45Cda10738e4a9089851F7a12F');
-      setIsConnecting(false);
-    }
-  };
-
-  const handleDisconnectWallet = () => {
-    setConnectedAddress(null);
-    setWalletChainId(null);
-  };
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard?.writeText(text);
-    setCopiedAddress(true);
-    setTimeout(() => setCopiedAddress(false), 2000);
-  };
-
-  const scrollToSection = (id: string) => {
-    const el = document.getElementById(id);
-    if (el) el.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const handlePing = () => {
-    setLastCheckIn(new Date());
-    setShowPingModal(false);
-  };
-
-  const handleAddBeneficiary = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newBenLabel || !newBenAddress) return;
-    const shareNum = Number(newBenShare) || 0;
-    setBeneficiaries([
-      ...beneficiaries,
-      {
-        id: `ben-${Date.now()}`,
-        label: newBenLabel,
-        address: newBenAddress,
-        share: shareNum,
-      },
-    ]);
-    setNewBenLabel('');
-    setNewBenAddress('');
-    setNewBenShare('20');
-    setShowAddBeneficiaryModal(false);
-  };
-
+function Brand({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="min-h-screen bg-secondary text-primary font-sans flex flex-col">
-      {/* Top Navbar */}
-      <header className="border-b border-secondary bg-primary sticky top-0 z-30 shadow-xs">
-        <div className="max-w-7xl mx-auto px-xl py-lg flex items-center justify-between">
-          <div className="flex items-center gap-md cursor-pointer" onClick={() => setView('landing')}>
-            <div className="w-10 h-10 rounded-lg bg-brand-solid flex items-center justify-center text-primary-on-brand shadow-xs">
-              <ShieldAlert className="w-5 h-5 text-fg-white" />
-            </div>
-            <div>
-              <div className="flex items-center gap-xs">
-                <span className="text-heading-xs font-bold text-primary">Kharis</span>
-                <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-xxs text-xs font-medium text-utility-brand-700">
-                  Base USDC Vault
-                </span>
-              </div>
-              <p className="text-xs text-secondary">A plan for your USDC, for the day you need one.</p>
-            </div>
+    <a
+      href="/"
+      aria-label="Kharis Sui legacy planning home"
+      title={compact ? 'Kharis home' : undefined}
+      className="mx-auto inline-flex w-fit items-center gap-md text-primary no-underline focus-visible:rounded-md focus-visible:ring-2 focus-visible:ring-focus-ring lg:mx-0"
+    >
+      <img src="/kharis-mark.svg" width="40" height="40" alt="" className="size-10 shrink-0" />
+      <span className={compact ? 'sr-only lg:not-sr-only lg:leading-tight' : 'leading-tight'}>
+        <span className="block text-md font-semibold">Kharis</span>
+        {!compact && <span className="block text-xs text-tertiary">Sui legacy planning</span>}
+      </span>
+    </a>
+  )
+}
+
+function LandingPage() {
+  return (
+    <div id="top" className="min-h-screen bg-primary text-primary">
+      <header className="sticky top-0 z-20 border-b border-secondary bg-primary">
+        <nav
+          aria-label="Main navigation"
+          className="mx-auto flex max-w-7xl items-center justify-between gap-lg px-xl py-md lg:px-4xl"
+        >
+          <Brand />
+          <div className="flex items-center gap-xs sm:gap-md">
+            <a
+              href="#how-it-works"
+              className="hidden rounded-md px-md py-sm text-sm font-medium text-secondary hover:bg-secondary-hover focus-visible:ring-2 focus-visible:ring-focus-ring sm:inline-flex"
+            >
+              Product
+            </a>
+            <a
+              href="#principles"
+              className="hidden rounded-md px-md py-sm text-sm font-medium text-secondary hover:bg-secondary-hover focus-visible:ring-2 focus-visible:ring-focus-ring md:inline-flex"
+            >
+              Principles
+            </a>
+            <a
+              href="#roadmap"
+              className="hidden rounded-md px-md py-sm text-sm font-medium text-secondary hover:bg-secondary-hover focus-visible:ring-2 focus-visible:ring-focus-ring md:inline-flex"
+            >
+              Roadmap
+            </a>
+            <a
+              href="#faq"
+              className="hidden rounded-md px-md py-sm text-sm font-medium text-secondary hover:bg-secondary-hover focus-visible:ring-2 focus-visible:ring-focus-ring md:inline-flex"
+            >
+              FAQ
+            </a>
+            <a
+              href="/app"
+              className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+            >
+              Explore Kharis
+              <ArrowRight size={16} className="shrink-0" aria-hidden="true" />
+            </a>
           </div>
-
-          <div className="flex items-center gap-md">
-            {view === 'landing' ? (
-              <nav className="hidden lg:flex items-center gap-lg text-sm text-secondary">
-                <button onClick={() => scrollToSection('problem')} className="hover:text-primary transition font-medium">
-                  The Problem
-                </button>
-                <button onClick={() => scrollToSection('how-it-works')} className="hover:text-primary transition font-medium">
-                  How It Works
-                </button>
-                <button onClick={() => scrollToSection('features')} className="hover:text-primary transition font-medium">
-                  Benefits
-                </button>
-                <button onClick={() => scrollToSection('security')} className="hover:text-primary transition font-medium">
-                  Security
-                </button>
-                <button onClick={() => scrollToSection('faq')} className="hover:text-primary transition font-medium">
-                  FAQ
-                </button>
-              </nav>
-            ) : null}
-
-            {/* Wallet Connect / Account Pill */}
-            {connectedAddress ? (
-              <div className="flex items-center gap-xs">
-                <div className="hidden sm:flex items-center gap-xs px-md py-sm rounded-lg bg-secondary border border-secondary text-xs">
-                  <span className="w-2 h-2 rounded-full bg-success-primary" />
-                  <span className="font-mono text-primary font-medium">
-                    {connectedAddress.substring(0, 6)}...{connectedAddress.substring(connectedAddress.length - 4)}
-                  </span>
-                  <button
-                    onClick={() => copyToClipboard(connectedAddress)}
-                    className="p-xxs hover:text-primary text-secondary ml-xxs"
-                    title="Copy address"
-                  >
-                    {copiedAddress ? <Check className="w-3 h-3 text-fg-success-primary" /> : <Copy className="w-3 h-3 text-fg-quaternary" />}
-                  </button>
-                </div>
-                <button
-                  onClick={handleDisconnectWallet}
-                  className="inline-flex items-center gap-xs rounded-lg bg-primary px-md py-sm text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                  title="Disconnect wallet"
-                >
-                  <LogOut className="w-3.5 h-3.5 text-fg-quaternary" />
-                  <span className="hidden sm:inline">Disconnect</span>
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setShowWalletModal(true)}
-                disabled={isConnecting}
-                className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
-              >
-                <Wallet className="w-4 h-4 text-fg-white shrink-0" />
-                <span>{isConnecting ? 'Connecting...' : 'Connect Wallet'}</span>
-              </button>
-            )}
-
-            {/* Launch App or Return button */}
-            {view === 'landing' ? (
-              <button
-                onClick={() => setView('app')}
-                className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-              >
-                <span>Launch App &rarr;</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => setView('landing')}
-                className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-              >
-                <span>&larr; Landing</span>
-              </button>
-            )}
-          </div>
-        </div>
+        </nav>
       </header>
 
-      {/* VIEW: LANDING PAGE */}
-      {view === 'landing' && (
-        <main className="flex-1">
-          {/* Hero Section */}
-          <section className="border-b border-secondary bg-primary py-2xl lg:py-4xl">
-            <div className="max-w-5xl mx-auto px-xl text-center space-y-xl">
-              <div className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-xs text-xs font-semibold text-utility-brand-700 shadow-xs">
-                <span className="w-2 h-2 rounded-full bg-brand-solid animate-pulse" />
-                <span>Runs on Base · Currently live on Base Mainnet &amp; Sepolia</span>
-              </div>
-
-              <h1 className="text-heading-xl lg:text-heading-2xl font-bold text-primary tracking-tight">
-                Your USDC, in the right hands.<br className="hidden sm:inline" /> Even when you can't be there.
-              </h1>
-
-              <p className="max-w-3xl mx-auto text-md lg:text-lg text-secondary leading-relaxed">
-                Kharis is a simple vault for your USDC. Choose who should receive it, then check in every so often.
-                If you ever stop, it passes to them in the shares you set. No company sits in the middle, and no one holds a key to it.
-              </p>
-
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-md pt-md">
-                <button
-                  onClick={() => {
-                    if (!connectedAddress) setShowWalletModal(true);
-                    setView('app');
-                  }}
-                  className="w-full sm:w-auto inline-flex items-center justify-center gap-sm rounded-lg border border-transparent bg-brand-solid px-2xl py-md text-md font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  <Wallet className="w-4 h-4 text-fg-white shrink-0" />
-                  <span>{connectedAddress ? 'Go to Vault →' : 'Connect Wallet & Launch →'}</span>
-                </button>
-                <button
-                  onClick={() => scrollToSection('how-it-works')}
-                  className="w-full sm:w-auto inline-flex items-center justify-center gap-sm rounded-lg bg-primary px-2xl py-md text-md font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  <span>See how it works &darr;</span>
-                </button>
-              </div>
-
-              <p className="text-xs text-tertiary">
-                Early software that hasn't been audited. Please start with small amounts.
-              </p>
+      <main>
+        <section className="mx-auto grid max-w-7xl gap-5xl px-xl py-7xl lg:grid-cols-2 lg:items-center lg:px-4xl lg:py-9xl">
+          <div className="flex flex-col items-start gap-lg">
+            <span className="inline-flex items-center gap-sm rounded-full border border-secondary bg-primary px-md py-xxs text-xs font-medium text-secondary shadow-xs">
+              <span className="size-2 rounded-full bg-brand-solid" aria-hidden="true" />
+              A more considered way to plan ahead
+            </span>
+            <h1 className="max-w-2xl text-heading-md font-semibold tracking-tight text-primary lg:text-heading-xl">
+              Leave a plan.
+              <br />
+              Keep control.
+            </h1>
+            <p className="max-w-xl text-lg leading-relaxed text-tertiary">
+              Set a check-in schedule, choose who you trust, and keep control of your plan.
+              Walrus Memory for separate notes is in progress.
+            </p>
+            <div className="mt-sm flex w-full flex-col gap-sm sm:w-auto sm:flex-row">
+              <a
+                href="/app"
+                className="inline-flex items-center justify-center gap-sm rounded-lg border border-transparent bg-brand-solid px-xl py-md text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                Explore Kharis
+                <ArrowRight size={16} className="shrink-0" aria-hidden="true" />
+              </a>
+              <a
+                href="#how-it-works"
+                className="inline-flex items-center justify-center rounded-lg border border-primary bg-primary px-xl py-md text-sm font-semibold text-secondary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+              >
+                See how it works
+              </a>
             </div>
-          </section>
+            <div className="mt-md flex flex-wrap items-center gap-x-lg gap-y-sm text-xs text-tertiary">
+              <span className="inline-flex items-center gap-xs">
+                <span className="size-2 rounded-full bg-success-primary" aria-hidden="true" />
+                Sui Testnet contract published
+              </span>
+              <span>Sui Testnet only · No real assets</span>
+            </div>
+          </div>
 
-          {/* Live Preview Card */}
-          <section className="max-w-5xl mx-auto px-xl -mt-lg mb-2xl">
-            <div className="rounded-xl border border-secondary bg-primary p-xl shadow-md space-y-md">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-md border-b border-secondary pb-md">
-                <div className="flex items-center gap-md">
-                  <div className="p-sm rounded-lg bg-utility-brand-50 border border-utility-brand-200">
-                    <HeartPulse className="w-5 h-5 text-fg-brand-primary" />
-                  </div>
+          <div className="rounded-2xl border border-secondary bg-primary p-xl shadow-xs sm:p-2xl">
+                <div className="flex items-start justify-between gap-lg">
                   <div>
-                    <span className="text-sm font-semibold text-primary">Live Switch Countdown Preview</span>
-                    <p className="text-xs text-secondary">
-                      {connectedAddress ? `Connected wallet: ${connectedAddress.substring(0, 10)}...` : 'Non-custodial proof-of-life status'}
+                    <p className="text-xs font-medium uppercase text-tertiary">
+                      A plan, by design
+                    </p>
+                    <h2 className="mt-sm text-heading-xs font-semibold text-primary">
+                      Built around your wishes
+                    </h2>
+                  </div>
+                  <span className="inline-flex shrink-0 items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-xxs text-xs font-medium text-utility-brand-700">
+                    Sui
+                  </span>
+                </div>
+                <p className="mt-md text-sm leading-relaxed text-tertiary">
+                  Choose your check-in schedule and beneficiaries. This smart contract is
+                  unaudited; use Testnet only.
+                </p>
+                <div className="mt-xl divide-y divide-secondary border-y border-secondary">
+                  <div className="flex items-center gap-md py-lg">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-fg-secondary">
+                      <Clock3 size={20} aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-primary">A check-in rhythm</p>
+                      <p className="mt-xxs text-xs text-tertiary">90-day window · 14-day grace</p>
+                    </div>
+                    <span className="ml-auto shrink-0 font-mono text-xs text-tertiary">01</span>
+                  </div>
+                  <div className="flex items-center gap-md py-lg">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-fg-secondary">
+                      <Users size={20} aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-primary">People you choose</p>
+                      <p className="mt-xxs text-xs text-tertiary">Up to 10 beneficiary addresses</p>
+                    </div>
+                    <span className="ml-auto shrink-0 font-mono text-xs text-tertiary">02</span>
+                  </div>
+                  <div className="flex items-center gap-md py-lg">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-fg-secondary">
+                      <ShieldCheck size={20} aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-primary">Owner control</p>
+                      <p className="mt-xxs text-xs text-tertiary">Actions remain open until release</p>
+                    </div>
+                    <span className="ml-auto shrink-0 font-mono text-xs text-tertiary">03</span>
+                  </div>
+                </div>
+                <div className="mt-lg flex flex-col gap-md rounded-lg border border-utility-warning-200 bg-utility-warning-50 p-lg sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-utility-warning-700">
+                      Sui Testnet only
+                    </p>
+                    <p className="mt-xxs text-xs text-secondary">
+                      Testnet only. Do not use valuable assets.
                     </p>
                   </div>
-                </div>
-                <div className="flex items-center gap-sm">
-                  <span className="inline-flex items-center gap-xs rounded-full border border-utility-success-200 bg-utility-success-50 px-md py-xxs text-xs font-medium text-utility-success-700">
-                    Active · 78 days remaining
-                  </span>
-                  <button
-                    onClick={() => setView('app')}
-                    className="text-xs font-semibold text-brand-primary hover:underline"
+                  <a
+                    href={TESTNET_PACKAGE_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex w-fit shrink-0 items-center gap-xs text-xs font-semibold text-brand-primary hover:underline focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-focus-ring"
                   >
-                    Open Live Vault &rarr;
-                  </button>
+                    View contract
+                    <ExternalLink size={14} className="shrink-0" aria-hidden="true" />
+                  </a>
                 </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-md text-xs">
-                <div className="p-md rounded-lg bg-secondary border border-secondary">
-                  <span className="text-secondary">Protected Assets</span>
-                  <p className="text-sm font-bold text-primary mt-xxs">$25,000.00 USDC</p>
-                </div>
-                <div className="p-md rounded-lg bg-secondary border border-secondary">
-                  <span className="text-secondary">Designated Beneficiaries</span>
-                  <p className="text-sm font-bold text-primary mt-xxs">3 Heirs (100% Split)</p>
-                </div>
-                <div className="p-md rounded-lg bg-secondary border border-secondary">
-                  <span className="text-secondary">Check-In Cadence</span>
-                  <p className="text-sm font-bold text-primary mt-xxs">Every 90 Days (+14d Grace)</p>
-                </div>
-              </div>
-            </div>
-          </section>
+          </div>
+        </section>
 
-          {/* The Problem Section */}
-          <section id="problem" className="py-2xl lg:py-3xl max-w-5xl mx-auto px-xl space-y-xl">
-            <div className="max-w-3xl space-y-md">
-              <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">The Dilemma</span>
-              <h2 className="text-heading-lg font-bold text-primary tracking-tight">
-                Your money is safe with you. That's the problem.
-              </h2>
-              <p className="text-md text-secondary leading-relaxed">
-                Holding your own USDC means nobody can freeze it, lose it, or spend it for you. But it also means nobody else can reach it.
-                If you're gone, or simply can't get to your wallet, those funds can sit untouched indefinitely, even when the people you'd want to have them are right there.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-lg">
-              <div className="rounded-xl border border-secondary bg-primary p-xl space-y-sm shadow-xs">
-                <div className="w-8 h-8 rounded-lg bg-utility-error-50 border border-utility-error-200 flex items-center justify-center text-utility-error-700">
-                  <AlertTriangle className="w-4 h-4 text-fg-error-primary" />
-                </div>
-                <h3 className="text-heading-xs font-semibold text-primary">Sharing Recovery Phrases</h3>
-                <p className="text-sm text-secondary leading-relaxed">
-                  Gives someone full access today, not just someday. It introduces immediate counterparty risk while you're still alive.
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-secondary bg-primary p-xl space-y-sm shadow-xs">
-                <div className="w-8 h-8 rounded-lg bg-utility-warning-50 border border-utility-warning-200 flex items-center justify-center text-utility-warning-700">
-                  <Users className="w-4 h-4 text-fg-warning-primary" />
-                </div>
-                <h3 className="text-heading-xs font-semibold text-primary">Trusting Custodians</h3>
-                <p className="text-sm text-secondary leading-relaxed">
-                  Handing funds to a centralized company means trusting an intermediary to exist, remain solvent, and act when it matters.
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-secondary bg-primary p-xl space-y-sm shadow-xs">
-                <div className="w-8 h-8 rounded-lg bg-utility-gray-50 border border-utility-gray-200 flex items-center justify-center text-secondary">
-                  <Lock className="w-4 h-4 text-fg-quaternary" />
-                </div>
-                <h3 className="text-heading-xs font-semibold text-primary">Instructions on Paper</h3>
-                <p className="text-sm text-secondary leading-relaxed">
-                  Writing seed words or instructions down somewhere relies on the right person finding them, surviving disasters, and knowing what to do.
-                </p>
-              </div>
-            </div>
-
-            <div className="p-xl rounded-xl border border-secondary bg-primary text-secondary text-sm leading-relaxed">
-              <strong className="text-primary font-semibold">Kharis takes another approach:</strong> You keep full control while you're here.
-              If you stop checking in, the rules you set decide where the money goes.
-            </div>
-          </section>
-
-          {/* How It Works Section */}
-          <section id="how-it-works" className="py-2xl lg:py-3xl border-t border-secondary bg-secondary">
-            <div className="max-w-5xl mx-auto px-xl space-y-xl">
-              <div className="text-center space-y-sm max-w-2xl mx-auto">
-                <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">Step-By-Step</span>
-                <h2 className="text-heading-lg font-bold text-primary tracking-tight">
-                  Four steps. Then you just live your life.
-                </h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-lg">
-                <div className="rounded-xl border border-secondary bg-primary p-xl space-y-sm shadow-xs">
-                  <div className="flex items-center gap-sm">
-                    <span className="w-7 h-7 rounded-full bg-brand-solid text-primary-on-brand text-xs font-bold flex items-center justify-center">1</span>
-                    <h3 className="text-heading-xs font-semibold text-primary">Create your vault</h3>
-                  </div>
-                  <p className="text-sm text-secondary leading-relaxed">
-                    Give it a name and add the USDC you want to set aside on Base. You can add more later, or take some back whenever you need.
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-secondary bg-primary p-xl space-y-sm shadow-xs">
-                  <div className="flex items-center gap-sm">
-                    <span className="w-7 h-7 rounded-full bg-brand-solid text-primary-on-brand text-xs font-bold flex items-center justify-center">2</span>
-                    <h3 className="text-heading-xs font-semibold text-primary">Choose your people</h3>
-                  </div>
-                  <p className="text-sm text-secondary leading-relaxed">
-                    Add up to 10 beneficiaries by wallet address and decide how much each one receives. Shares must add up to exactly 100%. One tap splits them evenly.
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-secondary bg-primary p-xl space-y-sm shadow-xs">
-                  <div className="flex items-center gap-sm">
-                    <span className="w-7 h-7 rounded-full bg-brand-solid text-primary-on-brand text-xs font-bold flex items-center justify-center">3</span>
-                    <h3 className="text-heading-xs font-semibold text-primary">Set your check-in window</h3>
-                  </div>
-                  <p className="text-sm text-secondary leading-relaxed">
-                    Choose how long Kharis should wait after your last sign of life, anywhere from 7 days to 10 years. Then, every so often, press "I'm Alive." The clock starts over each time.
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-secondary bg-primary p-xl space-y-sm shadow-xs">
-                  <div className="flex items-center gap-sm">
-                    <span className="w-7 h-7 rounded-full bg-brand-solid text-primary-on-brand text-xs font-bold flex items-center justify-center">4</span>
-                    <h3 className="text-heading-xs font-semibold text-primary">If you stop checking in, it passes on</h3>
-                  </div>
-                  <p className="text-sm text-secondary leading-relaxed">
-                    After your window runs out, anyone can trigger the release. Then anyone can press "Pay Everyone" to send every beneficiary their share in one transaction. Your beneficiaries don't have to sign anything to receive it.
-                  </p>
-                </div>
-              </div>
-
-              <div className="p-md rounded-lg bg-utility-brand-50 border border-utility-brand-200 text-utility-brand-700 text-xs">
-                <strong>Good to know:</strong> When you withdraw funds or update your beneficiaries, that also counts as checking in. Adding funds does not. Use "I'm Alive" for that.
-              </div>
-            </div>
-          </section>
-
-          {/* Features & Benefits */}
-          <section id="features" className="py-2xl lg:py-3xl border-t border-secondary bg-primary">
-            <div className="max-w-5xl mx-auto px-xl space-y-xl">
-              <div className="max-w-3xl space-y-sm">
-                <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">Architecture</span>
-                <h2 className="text-heading-lg font-bold text-primary tracking-tight">
-                  Built to be simple, and built so it can't be quietly changed.
-                </h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-lg">
-                <div className="p-xl rounded-xl border border-secondary bg-secondary space-y-sm">
-                  <h3 className="text-heading-xs font-semibold text-primary">You stay in control while you're here</h3>
-                  <p className="text-sm text-secondary leading-relaxed">
-                    Until the window runs out, the vault is yours. You can add USDC, withdraw it, update your beneficiaries, or close the vault and get your remaining balance back.
-                  </p>
-                </div>
-
-                <div className="p-xl rounded-xl border border-secondary bg-secondary space-y-sm">
-                  <h3 className="text-heading-xs font-semibold text-primary">Shares paid exactly as you set them</h3>
-                  <p className="text-sm text-secondary leading-relaxed">
-                    You set each person's share in fine increments (0.01%). When the vault pays out, the last beneficiary also gets any leftover rounding amount, so the whole balance goes out and nothing is left behind.
-                  </p>
-                </div>
-
-                <div className="p-xl rounded-xl border border-secondary bg-secondary space-y-sm">
-                  <h3 className="text-heading-xs font-semibold text-primary">Beneficiaries don't have to do anything</h3>
-                  <p className="text-sm text-secondary leading-relaxed">
-                    Anyone can pay everyone in a single transaction, so your beneficiaries never need to sign a transaction or keep funds on hand for fees. If they'd rather, each person can also claim their own share.
-                  </p>
-                </div>
-
-                <div className="p-xl rounded-xl border border-secondary bg-secondary space-y-sm">
-                  <h3 className="text-heading-xs font-semibold text-primary">One problem doesn't hold up everyone else</h3>
-                  <p className="text-sm text-secondary leading-relaxed">
-                    If one beneficiary's address can't receive USDC (for example, because it has been blocked by USDC's issuer), Kharis skips that person and pays the others. The skipped share stays set aside in the vault for that person.
-                  </p>
-                </div>
-
-                <div className="p-xl rounded-xl border border-secondary bg-secondary space-y-sm">
-                  <h3 className="text-heading-xs font-semibold text-primary">No admin keys. No upgrades. No pause button.</h3>
-                  <p className="text-sm text-secondary leading-relaxed">
-                    Nobody, including the people who built Kharis, can change the rules, freeze your vault, or move your funds. The contract has no owner and can't be upgraded.
-                  </p>
-                </div>
-
-                <div className="p-xl rounded-xl border border-secondary bg-secondary space-y-sm">
-                  <h3 className="text-heading-xs font-semibold text-primary">USDC only, start to finish</h3>
-                  <p className="text-sm text-secondary leading-relaxed">
-                    You deposit USDC and your beneficiaries receive USDC. On Base, transaction gas is less than a penny, so operating the vault requires negligible overhead.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* Trust & Security */}
-          <section id="security" className="py-2xl lg:py-3xl border-t border-secondary bg-secondary">
-            <div className="max-w-5xl mx-auto px-xl space-y-xl">
-              <div className="max-w-3xl space-y-sm">
-                <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">Verification &amp; Caveats</span>
-                <h2 className="text-heading-lg font-bold text-primary tracking-tight">
-                  What you can count on, and what you should know.
-                </h2>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-xl">
-                <div className="space-y-md">
-                  <h3 className="text-heading-xs font-semibold text-primary flex items-center gap-xs">
-                    <CheckCircle2 className="w-5 h-5 text-fg-success-primary" />
-                    <span>What the code guarantees</span>
-                  </h3>
-                  <ul className="space-y-sm text-xs text-secondary leading-relaxed">
-                    <li className="p-md rounded-lg bg-primary border border-secondary">
-                      <strong className="text-primary font-medium">No one else holds the keys:</strong> The vault contract has no owner, no administrator, no pause switch, and no upgrade path. Once deployed, its rules are immutable.
-                    </li>
-                    <li className="p-md rounded-lg bg-primary border border-secondary">
-                      <strong className="text-primary font-medium">Funds go only where you said:</strong> A release can only pay the beneficiaries you named, in the shares you set. Anyone may trigger a release once your window has passed, but nobody can redirect the money.
-                    </li>
-                    <li className="p-md rounded-lg bg-primary border border-secondary">
-                      <strong className="text-primary font-medium">Nothing happens early:</strong> Funds can't be released while your window is still open, and after a release nobody can claim the same share twice.
-                    </li>
-                    <li className="p-md rounded-lg bg-primary border border-secondary">
-                      <strong className="text-primary font-medium">Built with standard safeguards:</strong> The contract uses OpenZeppelin's widely used protection against re-entrancy attacks and has an automated test suite.
-                    </li>
-                  </ul>
-                </div>
-
-                <div className="space-y-md">
-                  <h3 className="text-heading-xs font-semibold text-primary flex items-center gap-xs">
-                    <AlertTriangle className="w-5 h-5 text-fg-warning-primary" />
-                    <span>What you should know before you use it</span>
-                  </h3>
-                  <ul className="space-y-sm text-xs text-secondary leading-relaxed">
-                    <li className="p-md rounded-lg bg-primary border border-secondary">
-                      <strong className="text-primary font-medium">It hasn't been audited:</strong> Kharis has not had an independent security audit. Smart contracts can have bugs; please use only amounts you could afford to lose.
-                    </li>
-                    <li className="p-md rounded-lg bg-primary border border-secondary">
-                      <strong className="text-primary font-medium">There is no undo:</strong> Because nobody holds admin keys, nobody can reverse a mistake. A wrong beneficiary address can't be corrected after release.
-                    </li>
-                    <li className="p-md rounded-lg bg-primary border border-secondary">
-                      <strong className="text-primary font-medium">It doesn't remind you:</strong> Kharis won't email you before your deadline. Set your own calendar reminder and choose a window with a comfortable margin.
-                    </li>
-                    <li className="p-md rounded-lg bg-primary border border-secondary">
-                      <strong className="text-primary font-medium">It isn't a legal will:</strong> Kharis moves USDC according to code. It doesn't replace legal, tax, or estate advice, and only covers the USDC inside the vault.
-                    </li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* FAQ Section */}
-          <section id="faq" className="py-2xl lg:py-3xl border-t border-secondary bg-primary">
-            <div className="max-w-4xl mx-auto px-xl space-y-xl">
-              <div className="text-center space-y-sm max-w-xl mx-auto">
-                <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">Common Questions</span>
-                <h2 className="text-heading-lg font-bold text-primary tracking-tight">
-                  Frequently Asked Questions
-                </h2>
-              </div>
-
-              <div className="space-y-sm">
-                {[
-                  {
-                    q: 'What exactly happens if I stop checking in?',
-                    a: 'Nothing happens right away. Once your inactivity window has fully passed, the vault becomes eligible for release. Someone (a beneficiary, a friend, or anyone else) presses "Trigger Release," which locks in the balance for payout. Then anyone can press "Pay Everyone" to send every beneficiary their share, or each beneficiary can claim their own.',
-                  },
-                  {
-                    q: "What if I just forget, or I'm in the hospital, and my deadline passes?",
-                    a: "The vault doesn't pay out by itself the moment your deadline passes. Someone has to trigger the release. Until that happens, checking in brings the vault back to normal. Once anyone triggers the release, though, it's final. Don't rely on this grace period. Choose a window with plenty of room to spare, and set yourself a reminder.",
-                  },
-                  {
-                    q: 'Do my beneficiaries need crypto, or gas, to receive their share?',
-                    a: "No. On Base, anyone can send every beneficiary their share in one transaction. Your beneficiaries don't have to sign anything or keep funds on hand. They only need a wallet address that can receive USDC.",
-                  },
-                  {
-                    q: 'Can I change my mind?',
-                    a: 'Yes, as long as your window hasn\'t run out. You can add or withdraw USDC, update your beneficiaries and their shares, or close the vault and get your full remaining balance back. Closing is permanent. If you change your mind later, you\'ll need to create a new vault.',
-                  },
-                  {
-                    q: 'Can Kharis, or anyone else, take my money?',
-                    a: 'No. The contract has no admin keys, no owner, and no upgrade mechanism, so nobody can move funds outside of the rules you configured when depositing.',
-                  },
-                ].map((item, idx) => (
-                  <div key={idx} className="rounded-xl border border-secondary bg-secondary overflow-hidden shadow-xs">
-                    <button
-                      onClick={() => setOpenFaq(openFaq === idx ? null : idx)}
-                      className="w-full p-xl flex items-center justify-between text-left text-sm font-semibold text-primary hover:bg-secondary-hover transition"
-                    >
-                      <span>{item.q}</span>
-                      {openFaq === idx ? (
-                        <ChevronUp className="w-4 h-4 text-fg-quaternary shrink-0" />
-                      ) : (
-                        <ChevronDown className="w-4 h-4 text-fg-quaternary shrink-0" />
-                      )}
-                    </button>
-                    {openFaq === idx && (
-                      <div className="px-xl pb-xl text-xs text-secondary leading-relaxed border-t border-secondary pt-md bg-primary">
-                        {item.a}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-
-          {/* Pre-Footer CTA */}
-          <section className="py-2xl lg:py-3xl border-t border-secondary bg-secondary text-center">
-            <div className="max-w-3xl mx-auto px-xl space-y-lg">
-              <h2 className="text-heading-lg font-bold text-primary tracking-tight">
-                Ready to protect your digital legacy on Base?
-              </h2>
-              <p className="text-sm text-secondary leading-relaxed">
-                Connect your Base wallet to configure your USDC allocations. No middleman, no admin keys.
-              </p>
-              <div>
-                <button
-                  onClick={() => {
-                    if (!connectedAddress) setShowWalletModal(true);
-                    setView('app');
-                  }}
-                  className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-2xl py-md text-md font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  <Wallet className="w-4 h-4 text-fg-white shrink-0" />
-                  <span>{connectedAddress ? 'Launch Vault Dashboard →' : 'Connect Wallet to Start →'}</span>
-                </button>
-              </div>
-            </div>
-          </section>
-        </main>
-      )}
-
-      {/* VIEW: LIVE WEB APP */}
-      {view === 'app' && (
-        <main className="flex-1 max-w-7xl w-full mx-auto px-xl py-2xl space-y-2xl">
-          {/* Wallet Status Notice if not connected */}
-          {!connectedAddress && (
-            <div className="rounded-xl border border-utility-warning-200 bg-utility-warning-50 p-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-md text-utility-warning-700">
-              <div className="flex items-center gap-md">
-                <AlertTriangle className="w-5 h-5 text-fg-warning-primary shrink-0" />
-                <div>
-                  <span className="font-semibold text-sm">Wallet Not Connected</span>
-                  <p className="text-xs text-secondary mt-xxs">Connect your Base wallet (Coinbase Wallet, MetaMask, Rabby) to manage your active inheritance vault.</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowWalletModal(true)}
-                className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring shrink-0"
+        <section className="border-y border-secondary bg-secondary">
+          <div className="mx-auto grid max-w-7xl gap-xl px-xl py-2xl sm:grid-cols-3 lg:px-4xl">
+            {[
+              ['Built on Sui', 'Your wallet stays in control'],
+              ['On Sui Testnet', 'See the contract for yourself'],
+              ['Testnet only', 'Not available for real assets'],
+            ].map(([title, detail], index) => (
+              <div
+                key={title}
+                className={`flex items-start gap-md ${
+                  index > 0 ? 'border-t border-secondary pt-xl sm:border-l sm:border-t-0 sm:pl-xl sm:pt-none' : ''
+                }`}
               >
-                <Wallet className="w-4 h-4 text-fg-white shrink-0" />
-                <span>Connect Wallet</span>
-              </button>
-            </div>
-          )}
-
-          {/* Health Banner */}
-          <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs">
-            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-xl">
-              <div className="flex items-start gap-lg">
-                <div className={`p-md rounded-xl ${
-                  switchStatus === 'ACTIVE'
-                    ? 'bg-utility-success-50 border border-utility-success-200'
-                    : switchStatus === 'TRIGGERED'
-                    ? 'bg-utility-error-50 border border-utility-error-200'
-                    : 'bg-utility-warning-50 border border-utility-warning-200'
-                }`}>
-                  {switchStatus === 'ACTIVE' ? (
-                    <CheckCircle2 className="w-8 h-8 text-fg-success-primary" />
-                  ) : switchStatus === 'TRIGGERED' ? (
-                    <ShieldAlert className="w-8 h-8 text-fg-error-primary" />
-                  ) : (
-                    <AlertTriangle className="w-8 h-8 text-fg-warning-primary" />
-                  )}
-                </div>
+                <span className="mt-xxs size-2 shrink-0 rounded-full bg-brand-solid" aria-hidden="true" />
                 <div>
-                  <div className="flex items-center gap-sm">
-                    <h2 className="text-heading-sm font-semibold text-primary">Switch Status: {switchStatus}</h2>
-                    <span className={`inline-flex items-center gap-xs rounded-full px-md py-xxs text-xs font-medium border ${
-                      switchStatus === 'ACTIVE'
-                        ? 'border-utility-success-200 bg-utility-success-50 text-utility-success-700'
-                        : switchStatus === 'TRIGGERED'
-                        ? 'border-utility-error-200 bg-utility-error-50 text-utility-error-700'
-                        : 'border-utility-warning-200 bg-utility-warning-50 text-utility-warning-700'
-                    }`}>
-                      {switchStatus === 'TRIGGERED'
-                        ? 'Vault Released to Beneficiaries'
-                        : `${daysUntilGrace} days until grace period`}
-                    </span>
-                  </div>
-                  <p className="text-sm text-secondary mt-xxs">
-                    Last proof-of-life ping verified {daysSinceHeartbeat} days ago ({lastCheckIn.toLocaleDateString()}).
-                    Press "I'm Alive" below to reset the {inactivityDays}-day countdown.
-                  </p>
+                  <p className="text-sm font-semibold text-primary">{title}</p>
+                  <p className="mt-xxs text-xs text-tertiary">{detail}</p>
                 </div>
               </div>
-
-              <div className="flex items-center gap-md w-full lg:w-auto justify-end">
-                <button
-                  onClick={() => setShowPingModal(true)}
-                  className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  <HeartPulse className="w-4 h-4 text-fg-white shrink-0" />
-                  <span>I'm Alive (Ping)</span>
-                </button>
-                <button
-                  onClick={() => setShowDepositModal(true)}
-                  className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  <Coins className="w-4 h-4 text-fg-secondary shrink-0" />
-                  <span>Deposit USDC</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Countdown Bar */}
-            <div className="mt-xl pt-lg border-t border-secondary">
-              <div className="flex justify-between items-center text-xs text-secondary mb-xs">
-                <span>Time since last check-in: <strong className="text-primary font-medium">{daysSinceHeartbeat} days</strong></span>
-                <span>Window: <strong className="text-primary font-medium">{inactivityDays} days</strong> (+{gracePeriodDays}d grace)</span>
-              </div>
-              <div className="w-full bg-secondary rounded-full h-3 overflow-hidden border border-secondary">
-                <div
-                  className={`h-full transition-all duration-500 ${
-                    daysSinceHeartbeat < inactivityDays * 0.75
-                      ? 'bg-success-primary'
-                      : daysSinceHeartbeat < inactivityDays
-                      ? 'bg-warning-primary'
-                      : 'bg-error-primary'
-                  }`}
-                  style={{ width: `${Math.min(100, Math.round((daysSinceHeartbeat / (inactivityDays + gracePeriodDays)) * 100))}%` }}
-                />
-              </div>
-              <div className="flex justify-between items-center text-xs text-tertiary mt-xs">
-                <span>Day 0 (Latest Check-in)</span>
-                <span>Day {inactivityDays} (Window Closes)</span>
-                <span>Day {inactivityDays + gracePeriodDays} (Execution Window)</span>
-              </div>
-            </div>
-          </section>
-
-          {/* Metric Tiles */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-lg">
-            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs">
-              <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">Protected Balance</span>
-              <p className="mt-md text-heading-sm font-bold text-primary">${vaultBalance.toLocaleString()} USDC</p>
-              <p className="text-xs text-secondary mt-xxs">Base Mainnet Native Token</p>
-            </section>
-
-            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs">
-              <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">Beneficiaries</span>
-              <p className="mt-md text-heading-sm font-bold text-primary">{beneficiaries.length} Designated Heirs</p>
-              <p className="text-xs text-secondary mt-xxs">100% allocation scheduled</p>
-            </section>
-
-            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs">
-              <span className="text-xs font-semibold uppercase tracking-wider text-quaternary">Inactivity Window</span>
-              <p className="mt-md text-heading-sm font-bold text-primary">{inactivityDays} Days</p>
-              <p className="text-xs text-secondary mt-xxs">+{gracePeriodDays} days grace period</p>
-            </section>
+            ))}
           </div>
+        </section>
 
-          {/* App Tabs */}
-          <div className="flex border-b border-secondary gap-xl">
-            <button
-              onClick={() => setAppTab('overview')}
-              className={`pb-md text-sm font-semibold transition border-b-2 ${
-                appTab === 'overview' ? 'border-brand text-brand-primary' : 'border-transparent text-secondary hover:text-primary'
-              }`}
-            >
-              Vault Dashboard
-            </button>
-            <button
-              onClick={() => setAppTab('beneficiaries')}
-              className={`pb-md text-sm font-semibold transition border-b-2 ${
-                appTab === 'beneficiaries' ? 'border-brand text-brand-primary' : 'border-transparent text-secondary hover:text-primary'
-              }`}
-            >
-              Beneficiaries ({beneficiaries.length})
-            </button>
-            <button
-              onClick={() => setAppTab('settings')}
-              className={`pb-md text-sm font-semibold transition border-b-2 ${
-                appTab === 'settings' ? 'border-brand text-brand-primary' : 'border-transparent text-secondary hover:text-primary'
-              }`}
-            >
-              Window Parameters
-            </button>
-          </div>
-
-          {appTab === 'overview' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-xl">
-              <div className="lg:col-span-2 space-y-xl">
-                <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-lg">
+        <section id="how-it-works" className="scroll-mt-24">
+          <div className="mx-auto max-w-7xl px-xl py-7xl lg:px-4xl lg:py-8xl">
+            <div className="max-w-2xl">
+              <p className="text-sm font-semibold text-brand-primary">How it works</p>
+              <h2 className="mt-md text-heading-sm font-semibold text-primary">
+                A plan that stays yours.
+              </h2>
+              <p className="mt-md text-md leading-relaxed text-tertiary">
+                Choose when to check in, who to include, and how your plan is shared.
+              </p>
+            </div>
+            <div className="mt-3xl grid gap-xl md:grid-cols-3">
+              {[
+                {
+                  number: '01',
+                  title: 'Choose your rhythm',
+                  text: 'Choose a schedule that gives you time to check in.',
+                  icon: Clock3,
+                },
+                {
+                  number: '02',
+                  title: 'Name your people',
+                  text: 'Name up to ten people and choose each person’s share.',
+                  icon: Users,
+                },
+                {
+                  number: '03',
+                  title: 'Stay in control',
+                  text: 'Your plan stays in your control until the release conditions are met.',
+                  icon: ShieldCheck,
+                },
+              ].map(({ number, title, text, icon: Icon }) => (
+                <article key={number} className="border-t border-secondary pt-xl">
                   <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-heading-xs font-semibold text-primary">Base Vault Contract</h3>
-                      <p className="text-xs text-secondary mt-xxs">No admin keys, no pause button, autonomous USDC distribution</p>
-                    </div>
-                    <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-xxs text-xs font-medium text-utility-brand-700">
-                      Base Mainnet
+                    <span className="flex size-10 items-center justify-center rounded-lg bg-secondary text-fg-secondary">
+                      <Icon size={20} aria-hidden="true" />
+                    </span>
+                    <span className="font-mono text-xs text-tertiary">{number} / 03</span>
+                  </div>
+                  <h3 className="mt-xl text-md font-semibold text-primary">{title}</h3>
+                  <p className="mt-sm text-sm leading-relaxed text-tertiary">{text}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section id="principles" className="scroll-mt-24 border-y border-secondary bg-secondary">
+          <div className="mx-auto grid max-w-7xl gap-3xl px-xl py-7xl lg:grid-cols-2 lg:items-center lg:px-4xl lg:py-8xl">
+            <div>
+              <p className="text-sm font-semibold text-brand-primary">Your choices</p>
+              <h2 className="mt-md max-w-xl text-heading-sm font-semibold text-primary">
+                Your keys. Your people. Your plan.
+              </h2>
+              <p className="mt-md max-w-xl text-md leading-relaxed text-tertiary">
+                Your wallet approves each action. Your choices are recorded in a public
+                smart contract you can inspect.
+              </p>
+            </div>
+            <ul className="divide-y divide-secondary border-y border-secondary">
+              {[
+                ['Your keys stay yours', 'Approve every vault action in your Sui wallet.'],
+                ['Clear rules', 'Inspect the smart contract on Sui Testnet.'],
+                ['Memory stays separate', 'Optional Walrus notes never control your vault.'],
+              ].map(([title, detail]) => (
+                <li key={title} className="py-lg">
+                  <h3 className="text-sm font-semibold text-primary">{title}</h3>
+                  <p className="mt-xs text-sm leading-relaxed text-tertiary">{detail}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        <section id="roadmap" className="scroll-mt-24 border-y border-secondary bg-secondary">
+          <div className="mx-auto max-w-7xl px-xl py-7xl lg:px-4xl lg:py-8xl">
+            <div className="grid gap-xl lg:grid-cols-2 lg:items-end">
+              <div>
+                <p className="text-sm font-semibold text-brand-primary">What’s next</p>
+                <h2 className="mt-md max-w-xl text-heading-sm font-semibold text-primary">
+                  Built on Sui. Your notes on Walrus.
+                </h2>
+              </div>
+              <p className="max-w-xl text-sm leading-relaxed text-tertiary lg:justify-self-end">
+                Vault setup is being tested on Sui Testnet. Walrus Memory is in progress;
+                Mainnet comes after testing and an independent audit.
+              </p>
+            </div>
+            <ol className="mt-3xl grid gap-xl sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                {
+                  number: '01',
+                  status: 'Available',
+                  statusClass:
+                    'border-utility-success-200 bg-utility-success-50 text-utility-success-700',
+                  title: 'Vault rules',
+                  detail:
+                    'Explore the rules that govern your plan on Sui Testnet.',
+                },
+                {
+                  number: '02',
+                  status: 'In testing',
+                  statusClass:
+                    'border-utility-warning-200 bg-utility-warning-50 text-utility-warning-700',
+                  title: 'Vault setup and check-ins',
+                  detail:
+                    'Testnet setup and check-ins are being tested. Never use real assets.',
+                },
+                {
+                  number: '03',
+                  status: 'In progress',
+                  statusClass:
+                    'border-utility-warning-200 bg-utility-warning-50 text-utility-warning-700',
+                  title: 'Walrus Memory',
+                  detail:
+                    'Build notes on Walrus that stay separate from your vault.',
+                },
+                {
+                  number: '04',
+                  status: 'Before Mainnet',
+                  statusClass:
+                    'border-utility-gray-200 bg-utility-gray-50 text-utility-gray-700',
+                  title: 'Mainnet launch',
+                  detail:
+                    'Independent security audit and complete Testnet testing come first.',
+                },
+              ].map(({ number, status, statusClass, title, detail }) => (
+                <li key={number} className="border-t border-secondary pt-lg">
+                  <div className="flex items-center justify-between gap-sm">
+                    <span className="font-mono text-xs text-tertiary">{number}</span>
+                    <span
+                      className={`inline-flex rounded-full border px-md py-xxs text-xs font-medium ${statusClass}`}
+                    >
+                      {status}
                     </span>
                   </div>
-
-                  <div className="p-md rounded-lg bg-secondary border border-secondary font-mono text-xs text-primary flex items-center justify-between">
-                    <span>0x742d35Cc6634C0532925a3b844Bc454e4438f44e</span>
-                    <a
-                      href="https://basescan.org/address/0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-brand-primary hover:underline flex items-center gap-xxs"
-                    >
-                      <span>Basescan</span>
-                      <ExternalLink className="w-3 h-3 text-fg-brand-primary" />
-                    </a>
-                  </div>
-
-                  <div className="space-y-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-quaternary uppercase tracking-wider">Beneficiary Shares</span>
-                      <button
-                        onClick={() => setShowAddBeneficiaryModal(true)}
-                        className="text-xs font-semibold text-brand-primary hover:underline flex items-center gap-xxs"
-                      >
-                        <Plus className="w-3.5 h-3.5 text-fg-brand-primary" />
-                        <span>Add Beneficiary</span>
-                      </button>
-                    </div>
-
-                    {beneficiaries.map((b) => (
-                      <div key={b.id} className="p-md rounded-lg bg-secondary border border-secondary flex items-center justify-between text-xs">
-                        <div>
-                          <span className="font-semibold text-primary">{b.label}</span>
-                          <span className="text-secondary ml-xs font-mono">({b.address})</span>
-                        </div>
-                        <div className="flex items-center gap-md">
-                          <span className="font-semibold text-primary">${((vaultBalance * b.share) / 100).toLocaleString()} USDC</span>
-                          <span className="inline-flex items-center rounded-full border border-utility-gray-200 bg-utility-gray-50 px-sm py-xxs font-medium text-secondary">
-                            {b.share}%
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              </div>
-
-              <div className="space-y-xl">
-                <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
-                  <h3 className="text-heading-xs font-semibold text-primary">Emergency Revocation</h3>
-                  <p className="text-xs text-secondary leading-relaxed">
-                    Until your inactivity window runs out, you retain 100% custody. You can withdraw your USDC at any time or close the vault permanently.
-                  </p>
-                  <button
-                    onClick={() => setVaultBalance(0)}
-                    className="w-full inline-flex items-center justify-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-error-primary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                  >
-                    <span>Emergency Full Withdrawal</span>
-                  </button>
-                </section>
-              </div>
-            </div>
-          )}
-
-          {appTab === 'beneficiaries' && (
-            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-lg">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-md">
-                <div>
-                  <h3 className="text-heading-xs font-semibold text-primary">Name Beneficiaries (Up to 10)</h3>
-                  <p className="text-xs text-secondary mt-xxs">Add Base wallet addresses and choose exact percentage portions.</p>
-                </div>
-                <button
-                  onClick={() => setShowAddBeneficiaryModal(true)}
-                  className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  <Plus className="w-4 h-4 text-fg-white shrink-0" />
-                  <span>Add Beneficiary</span>
-                </button>
-              </div>
-
-              <div className="overflow-hidden rounded-xl border border-secondary bg-primary">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-secondary text-quaternary font-semibold">
-                    <tr className="border-b border-secondary">
-                      <th className="px-3xl py-md">Label</th>
-                      <th className="px-3xl py-md">Base Address</th>
-                      <th className="px-3xl py-md">Share (%)</th>
-                      <th className="px-3xl py-md">Value (USDC)</th>
-                      <th className="px-3xl py-md text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-secondary">
-                    {beneficiaries.map((b) => (
-                      <tr key={b.id} className="hover:bg-secondary-hover">
-                        <td className="px-3xl py-xl font-medium text-primary">{b.label}</td>
-                        <td className="px-3xl py-xl font-mono text-tertiary">{b.address}</td>
-                        <td className="px-3xl py-xl font-semibold text-primary">{b.share}%</td>
-                        <td className="px-3xl py-xl text-primary font-medium">
-                          ${((vaultBalance * b.share) / 100).toLocaleString()} USDC
-                        </td>
-                        <td className="px-3xl py-xl text-right">
-                          <button
-                            onClick={() => setBeneficiaries(beneficiaries.filter((item) => item.id !== b.id))}
-                            className="text-xs font-semibold text-error-primary hover:underline"
-                          >
-                            Remove
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
-
-          {appTab === 'settings' && (
-            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-lg">
-              <div>
-                <h3 className="text-heading-xs font-semibold text-primary">Inactivity &amp; Check-In Window</h3>
-                <p className="text-xs text-secondary mt-xxs">Choose how long Kharis should wait after your last sign of life (7 days to 10 years).</p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-xl">
-                <div className="flex flex-col gap-sm">
-                  <label className="text-sm font-medium text-secondary">Inactivity Window (Days)</label>
-                  <input
-                    type="number"
-                    value={inactivityDays}
-                    onChange={(e) => setInactivityDays(Number(e.target.value))}
-                    min="7"
-                    max="3650"
-                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
-                  />
-                  <p className="text-xs text-tertiary">Any withdrawal or "I'm Alive" ping resets this countdown.</p>
-                </div>
-
-                <div className="flex flex-col gap-sm">
-                  <label className="text-sm font-medium text-secondary">Grace Period Buffer (Days)</label>
-                  <input
-                    type="number"
-                    value={gracePeriodDays}
-                    onChange={(e) => setGracePeriodDays(Number(e.target.value))}
-                    min="1"
-                    max="90"
-                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
-                  />
-                  <p className="text-xs text-tertiary">Warning period before payout execution is unlocked.</p>
-                </div>
-              </div>
-            </section>
-          )}
-        </main>
-      )}
-
-      {/* Connect Wallet Modal (TDS Dialog Recipe) */}
-      {showWalletModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-md">
-          <div className="fixed inset-0 bg-overlay opacity-70" onClick={() => setShowWalletModal(false)} />
-          <div className="relative flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg bg-primary shadow-2xl z-10 border border-secondary">
-            <header className="flex items-start justify-between gap-lg border-b border-secondary p-xl">
-              <div>
-                <h2 className="text-lg font-semibold text-primary">Connect Wallet</h2>
-                <p className="text-xs text-secondary mt-xxs">Connect to manage your Kharis USDC vault on Base</p>
-              </div>
-              <button
-                onClick={() => setShowWalletModal(false)}
-                className="text-tertiary hover:text-primary text-sm font-semibold p-xs"
-              >
-                ✕
-              </button>
-            </header>
-
-            <div className="min-h-0 flex-1 overflow-y-auto p-xl space-y-md">
-              <button
-                onClick={() => handleConnectWallet('coinbase')}
-                className="flex w-full items-center justify-between p-lg rounded-lg border border-secondary bg-secondary hover:bg-secondary-hover transition focus-visible:ring-2 focus-visible:ring-focus-ring"
-              >
-                <div className="flex items-center gap-md">
-                  <div className="w-9 h-9 rounded-md bg-brand-solid flex items-center justify-center text-primary-on-brand font-bold text-xs">
-                    CB
-                  </div>
-                  <div className="text-left">
-                    <span className="font-semibold text-sm text-primary block">Coinbase Wallet</span>
-                    <span className="text-xs text-secondary">Native Base Smart Wallet &amp; Extension</span>
-                  </div>
-                </div>
-                <ArrowRight className="w-4 h-4 text-fg-quaternary" />
-              </button>
-
-              <button
-                onClick={() => handleConnectWallet('injected')}
-                className="flex w-full items-center justify-between p-lg rounded-lg border border-secondary bg-secondary hover:bg-secondary-hover transition focus-visible:ring-2 focus-visible:ring-focus-ring"
-              >
-                <div className="flex items-center gap-md">
-                  <div className="w-9 h-9 rounded-md bg-utility-brand-50 border border-utility-brand-200 flex items-center justify-center text-utility-brand-700 font-bold text-xs">
-                    <Wallet className="w-4 h-4 text-fg-brand-primary" />
-                  </div>
-                  <div className="text-left">
-                    <span className="font-semibold text-sm text-primary block">Browser Wallet</span>
-                    <span className="text-xs text-secondary">MetaMask, Rabby, Rainbow or Injected</span>
-                  </div>
-                </div>
-                <ArrowRight className="w-4 h-4 text-fg-quaternary" />
-              </button>
-
-              <button
-                onClick={() => handleConnectWallet('demo')}
-                className="flex w-full items-center justify-between p-lg rounded-lg border border-secondary bg-primary hover:bg-secondary-hover transition focus-visible:ring-2 focus-visible:ring-focus-ring"
-              >
-                <div className="flex items-center gap-md">
-                  <div className="w-9 h-9 rounded-md bg-utility-gray-50 border border-utility-gray-200 flex items-center justify-center text-secondary font-bold text-xs">
-                    0x
-                  </div>
-                  <div className="text-left">
-                    <span className="font-semibold text-sm text-primary block">Demo Base Account</span>
-                    <span className="text-xs text-secondary">Test vault controls instantly without signing</span>
-                  </div>
-                </div>
-                <ArrowRight className="w-4 h-4 text-fg-quaternary" />
-              </button>
-            </div>
-
-            <footer className="flex justify-between items-center border-t border-secondary p-xl text-xs text-secondary">
-              <span>Network: Base Mainnet (8453)</span>
-              <button
-                onClick={() => setShowWalletModal(false)}
-                className="text-xs font-semibold text-secondary hover:text-primary"
-              >
-                Cancel
-              </button>
-            </footer>
+                  <h3 className="mt-xl text-md font-semibold text-primary">{title}</h3>
+                  <p className="mt-sm text-sm leading-relaxed text-tertiary">{detail}</p>
+                </li>
+              ))}
+            </ol>
           </div>
-        </div>
-      )}
+        </section>
 
-      {/* Ping Modal */}
-      {showPingModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-md">
-          <div className="fixed inset-0 bg-overlay opacity-70" onClick={() => setShowPingModal(false)} />
-          <div className="relative flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg bg-primary shadow-2xl z-10 border border-secondary">
-            <header className="flex items-start justify-between gap-lg border-b border-secondary p-xl">
-              <div className="flex items-center gap-xs">
-                <HeartPulse className="w-5 h-5 text-fg-brand-primary" />
-                <h2 className="text-lg font-semibold text-primary">"I'm Alive" Check In</h2>
-              </div>
-              <button onClick={() => setShowPingModal(false)} className="text-tertiary hover:text-primary text-sm font-semibold p-xs">
-                ✕
-              </button>
-            </header>
-
-            <div className="min-h-0 flex-1 overflow-y-auto p-xl space-y-md text-sm text-secondary">
-              <p className="text-xs leading-relaxed">
-                Pressing "I'm Alive" proves you are active and resets the inactivity countdown for another {inactivityDays} days.
+        <section id="faq" className="scroll-mt-24">
+          <div className="mx-auto grid max-w-7xl gap-3xl px-xl py-7xl lg:grid-cols-2 lg:px-4xl lg:py-8xl">
+            <div className="max-w-md">
+              <p className="text-sm font-semibold text-brand-primary">Good to know</p>
+              <h2 className="mt-md text-heading-sm font-semibold text-primary">
+                Before you begin.
+              </h2>
+              <p className="mt-md text-sm leading-relaxed text-tertiary">
+                A few important details about using Kharis.
               </p>
-              <div className="p-md rounded-lg bg-secondary border border-secondary text-xs space-y-xs">
-                <div className="flex justify-between">
-                  <span>Signer:</span>
-                  <span className="font-mono text-primary">{connectedAddress ? `${connectedAddress.substring(0, 10)}...` : 'Demo Wallet'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Network:</span>
-                  <span className="font-medium text-primary">Base Mainnet</span>
-                </div>
-              </div>
             </div>
-
-            <footer className="flex justify-end gap-sm border-t border-secondary p-xl">
-              <button
-                onClick={() => setShowPingModal(false)}
-                className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handlePing}
-                className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-              >
-                <HeartPulse className="w-4 h-4 text-fg-white shrink-0" />
-                <span>Confirm Check In</span>
-              </button>
-            </footer>
-          </div>
-        </div>
-      )}
-
-      {/* Deposit Modal */}
-      {showDepositModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-md">
-          <div className="fixed inset-0 bg-overlay opacity-70" onClick={() => setShowDepositModal(false)} />
-          <div className="relative flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg bg-primary shadow-2xl z-10 border border-secondary">
-            <header className="flex items-start justify-between gap-lg border-b border-secondary p-xl">
-              <div className="flex items-center gap-xs">
-                <Coins className="w-5 h-5 text-fg-brand-primary" />
-                <h2 className="text-lg font-semibold text-primary">Deposit USDC</h2>
-              </div>
-              <button onClick={() => setShowDepositModal(false)} className="text-tertiary hover:text-primary text-sm font-semibold p-xs">
-                ✕
-              </button>
-            </header>
-
-            <div className="min-h-0 flex-1 overflow-y-auto p-xl space-y-md">
-              <div className="flex flex-col gap-sm">
-                <label className="text-sm font-medium text-secondary">Amount (USDC)</label>
-                <input
-                  type="number"
-                  value={depositAmount}
-                  onChange={(e) => setDepositAmount(e.target.value)}
-                  className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
-                />
-                <p className="text-xs text-tertiary">Deposited to Base contract 0x742d...f44e</p>
-              </div>
+            <div className="divide-y divide-secondary border-y border-secondary">
+              {[
+                {
+                  question: 'Can I add assets to my vault?',
+                  answer:
+                    'Vaults are for Sui Testnet only and the contract has not been audited. Never use real or valuable assets.',
+                },
+                {
+                  question: 'Has the contract been audited?',
+                  answer:
+                    'No. The smart contract is unaudited and is not ready for real assets.',
+                },
+                {
+                  question: 'What is Walrus Memory used for?',
+                  answer:
+                    'Walrus Memory is being built for notes that stay separate from your vault. It never controls your assets or beneficiaries.',
+                },
+              ].map(({ question, answer }) => (
+                <details key={question} className="group py-lg">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-lg text-sm font-semibold text-primary focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-focus-ring">
+                    {question}
+                    <ChevronDown
+                      size={16}
+                      className="shrink-0 text-fg-quaternary transition-transform group-open:rotate-180"
+                      aria-hidden="true"
+                    />
+                  </summary>
+                  <p className="mt-md max-w-2xl pr-2xl text-sm leading-relaxed text-tertiary">
+                    {answer}
+                  </p>
+                </details>
+              ))}
             </div>
+          </div>
+        </section>
 
-            <footer className="flex justify-end gap-sm border-t border-secondary p-xl">
-              <button
-                onClick={() => setShowDepositModal(false)}
-                className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+        <section className="border-t border-secondary bg-secondary">
+          <div className="mx-auto flex max-w-7xl flex-col gap-xl px-xl py-6xl lg:flex-row lg:items-center lg:justify-between lg:px-4xl">
+            <div className="max-w-2xl">
+              <p className="text-sm font-semibold text-brand-primary">Get started</p>
+              <h2 className="mt-md text-heading-sm font-semibold text-primary">
+                Make a plan on your terms.
+              </h2>
+              <p className="mt-md text-sm leading-relaxed text-tertiary">
+                View your Sui account, explore vault features, and learn about Walrus Memory.
+              </p>
+            </div>
+            <a
+              href="/app"
+              className="inline-flex w-fit shrink-0 items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-xl py-md text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+            >
+              Open Kharis
+              <ArrowRight size={16} className="shrink-0" aria-hidden="true" />
+            </a>
+          </div>
+        </section>
+      </main>
+
+      <footer className="border-t border-secondary bg-primary">
+        <div className="mx-auto max-w-7xl px-xl py-5xl lg:px-4xl lg:py-6xl">
+          <div className="grid gap-3xl border-b border-secondary pb-3xl sm:grid-cols-2 lg:grid-cols-4">
+            <div className="sm:col-span-2">
+              <Brand />
+              <p className="mt-lg max-w-sm text-sm leading-relaxed text-tertiary">
+                A clear, considered way to plan ahead.
+              </p>
+            </div>
+            <nav aria-label="Footer navigation">
+              <h2 className="text-sm font-semibold text-primary">Explore</h2>
+              <ul className="mt-md space-y-sm text-sm text-secondary">
+                <li><a href="#how-it-works" className="hover:text-primary focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-focus-ring">How it works</a></li>
+                <li><a href="#principles" className="hover:text-primary focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-focus-ring">Our principles</a></li>
+                <li><a href="#roadmap" className="hover:text-primary focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-focus-ring">What comes next</a></li>
+                <li><a href="#faq" className="hover:text-primary focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-focus-ring">FAQ</a></li>
+                <li><a href="/app" className="hover:text-primary focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-focus-ring">Open Kharis</a></li>
+              </ul>
+            </nav>
+            <div>
+              <h2 className="text-sm font-semibold text-primary">Sui Testnet</h2>
+              <a
+                href={TESTNET_PACKAGE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-md inline-flex items-center gap-xs text-sm text-secondary hover:text-primary focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-focus-ring"
               >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  setVaultBalance(vaultBalance + Number(depositAmount || 0));
-                  setShowDepositModal(false);
-                }}
-                className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-              >
-                <span>Deposit USDC</span>
-              </button>
-            </footer>
+                View smart contract
+                <ExternalLink size={14} className="shrink-0" aria-hidden="true" />
+              </a>
+              <p className="mt-md text-xs leading-relaxed text-tertiary">
+                Unaudited · Testnet only · Never use real assets.
+              </p>
+            </div>
           </div>
-        </div>
-      )}
-
-      {/* Add Beneficiary Modal */}
-      {showAddBeneficiaryModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-md">
-          <div className="fixed inset-0 bg-overlay opacity-70" onClick={() => setShowAddBeneficiaryModal(false)} />
-          <div className="relative flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-lg bg-primary shadow-2xl z-10 border border-secondary">
-            <header className="flex items-start justify-between gap-lg border-b border-secondary p-xl">
-              <div className="flex items-center gap-xs">
-                <Users className="w-5 h-5 text-fg-brand-primary" />
-                <h2 className="text-lg font-semibold text-primary">Add Beneficiary</h2>
-              </div>
-              <button onClick={() => setShowAddBeneficiaryModal(false)} className="text-tertiary hover:text-primary text-sm font-semibold p-xs">
-                ✕
-              </button>
-            </header>
-
-            <form onSubmit={handleAddBeneficiary}>
-              <div className="min-h-0 flex-1 overflow-y-auto p-xl space-y-md">
-                <div className="flex flex-col gap-sm">
-                  <label className="text-sm font-medium text-secondary">Label / Relationship</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Eldest Child, Sibling, Legal Trust"
-                    value={newBenLabel}
-                    onChange={(e) => setNewBenLabel(e.target.value)}
-                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-sm">
-                  <label className="text-sm font-medium text-secondary">Base Wallet Address</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="0x..."
-                    value={newBenAddress}
-                    onChange={(e) => setNewBenAddress(e.target.value)}
-                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring font-mono"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-sm">
-                  <label className="text-sm font-medium text-secondary">Allocation Share (%)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="100"
-                    required
-                    value={newBenShare}
-                    onChange={(e) => setNewBenShare(e.target.value)}
-                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
-                  />
-                </div>
-              </div>
-
-              <footer className="flex justify-end gap-sm border-t border-secondary p-xl">
-                <button
-                  type="button"
-                  onClick={() => setShowAddBeneficiaryModal(false)}
-                  className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
-                >
-                  <span>Save Beneficiary</span>
-                </button>
-              </footer>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Footer */}
-      <footer className="border-t border-secondary bg-primary py-xl text-xs text-secondary">
-        <div className="max-w-7xl mx-auto px-xl flex flex-col sm:flex-row items-center justify-between gap-md">
-          <div className="flex items-center gap-xs">
-            <ShieldAlert className="w-4 h-4 text-fg-brand-primary" />
-            <span className="font-semibold text-primary">Kharis</span>
-            <span className="text-tertiary">· Non-custodial USDC dead-man's switch on Base</span>
-          </div>
-          <div className="text-tertiary">
-            Early software that hasn't been audited. Please start with small amounts.
+          <div className="flex flex-col gap-sm pt-lg text-xs text-tertiary sm:flex-row sm:items-center sm:justify-between">
+            <span>© {new Date().getFullYear()} Kharis. Built for thoughtful planning.</span>
+            <a
+              href="#top"
+              className="w-fit hover:text-primary focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-focus-ring"
+            >
+              Back to top ↑
+            </a>
           </div>
         </div>
       </footer>
     </div>
-  );
+  )
 }
 
-export default App;
+function PageHeader({ page }: { page: WorkspacePage }) {
+  const details = pageDetails[page]
+  return (
+    <header className="flex flex-col gap-lg border-b border-secondary bg-primary px-xl py-xl lg:flex-row lg:items-start lg:justify-between lg:px-3xl">
+      <div className="min-w-0">
+        <h1 className="text-heading-xs font-semibold text-primary">{details.title}</h1>
+        {details.description && (
+          <p className="mt-xs text-sm text-tertiary">{details.description}</p>
+        )}
+      </div>
+    </header>
+  )
+}
+
+function OverviewPage({
+  accountAddress,
+  balance,
+  balanceError,
+  loadingBalance,
+}: {
+  accountAddress: string | undefined
+  balance: BalanceResponse | null
+  balanceError: string | null
+  loadingBalance: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-2xl">
+      <section className="flex flex-col gap-lg rounded-xl border border-secondary bg-primary p-xl shadow-xs sm:flex-row sm:items-start sm:justify-between sm:p-2xl">
+        <div className="flex items-start gap-md">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-fg-secondary">
+            <LockKeyhole size={20} aria-hidden="true" />
+          </span>
+          <div>
+            <h2 className="text-md font-semibold text-primary">Testnet only</h2>
+            <p className="mt-xs max-w-2xl text-sm leading-relaxed text-tertiary">
+              The contract is unaudited. Never use real assets.
+            </p>
+          </div>
+        </div>
+        <a
+          href={TESTNET_PACKAGE_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex w-fit items-center gap-sm rounded-md text-sm font-medium text-brand-primary hover:underline focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          View contract
+          <ExternalLink size={14} className="shrink-0" aria-hidden="true" />
+        </a>
+      </section>
+
+      <section aria-label="Sui account" className="grid gap-lg md:grid-cols-2">
+        <article className="rounded-xl border border-secondary bg-primary p-xl shadow-xs">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-tertiary">Wallet address</p>
+            <Wallet size={18} className="shrink-0 text-fg-quaternary" aria-hidden="true" />
+          </div>
+          {accountAddress ? (
+            <>
+              <p className="mt-md break-all font-mono text-sm font-semibold text-primary">
+                {shortAddress(accountAddress)}
+              </p>
+              <p className="mt-xs break-all font-mono text-xs text-tertiary">{accountAddress}</p>
+            </>
+          ) : (
+            <p className="mt-md text-sm text-secondary">Connect a wallet to see your address.</p>
+          )}
+        </article>
+        <article className="rounded-xl border border-secondary bg-primary p-xl shadow-xs" aria-live="polite">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-tertiary">SUI balance</p>
+          </div>
+          {!accountAddress ? (
+            <p className="mt-md text-sm text-secondary">Connect a wallet to see your balance.</p>
+          ) : loadingBalance ? (
+            <p className="mt-md text-sm text-secondary">Loading balance…</p>
+          ) : balanceError ? (
+            <p className="mt-md text-sm text-error-primary" role="alert">{balanceError}</p>
+          ) : balance ? (
+            <p className="mt-md text-heading-xs font-semibold text-primary">
+              {formatSui(balance.totalBalanceMist)} SUI
+            </p>
+          ) : (
+            <p className="mt-md text-sm text-secondary">Balance isn’t available right now.</p>
+          )}
+        </article>
+      </section>
+    </div>
+  )
+}
+
+function SettingsPage({
+  network,
+  setNetwork,
+}: {
+  network: SuiNetwork
+  setNetwork: (network: SuiNetwork) => void
+}) {
+  return (
+    <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs sm:p-2xl">
+      <h2 className="text-md font-semibold text-primary">Account network</h2>
+      <p className="mt-xs text-sm text-tertiary">
+        Choose a network for your account. Vault actions are available on Testnet only.
+      </p>
+      <div className="mt-xl inline-flex rounded-lg border border-secondary bg-secondary p-xxs" aria-label="Sui network">
+        {(['testnet', 'mainnet'] as const).map((item) => (
+          <button
+            key={item}
+            type="button"
+            aria-pressed={network === item}
+            onClick={() => setNetwork(item)}
+            className={`rounded-md px-md py-xs text-xs font-semibold capitalize focus-visible:ring-2 focus-visible:ring-focus-ring ${
+              network === item
+                ? 'bg-primary text-primary shadow-xs'
+                : 'text-secondary hover:text-primary'
+            }`}
+          >
+            {item}
+          </button>
+        ))}
+      </div>
+      {network === 'mainnet' && (
+        <p className="mt-lg max-w-xl text-xs leading-relaxed text-utility-warning-700">
+          On Mainnet, you can check balances only. Vault actions aren’t available.
+        </p>
+      )}
+    </section>
+  )
+}
+
+function Workspace() {
+  const account = useCurrentAccount()
+  const network = useCurrentNetwork() as SuiNetwork
+  const dAppKit = useDAppKit()
+  const [pathname, setPathname] = useState(window.location.pathname)
+  const [balance, setBalance] = useState<BalanceResponse | null>(null)
+  const [balanceError, setBalanceError] = useState<string | null>(null)
+  const [loadingBalance, setLoadingBalance] = useState(false)
+  const page = getPage(pathname)
+
+  useEffect(() => {
+    const updatePath = () => setPathname(window.location.pathname)
+    window.addEventListener('popstate', updatePath)
+    return () => window.removeEventListener('popstate', updatePath)
+  }, [])
+
+  useEffect(() => {
+    if (!account) {
+      setBalance(null)
+      setBalanceError(null)
+      setLoadingBalance(false)
+      return
+    }
+
+    const controller = new AbortController()
+    setLoadingBalance(true)
+    setBalanceError(null)
+    setBalance(null)
+
+    fetch(`/api/sui/${network}/balance/${encodeURIComponent(account.address)}`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const body = await response.json()
+        if (!response.ok) throw new Error('Your balance is unavailable right now.')
+        return body as BalanceResponse
+      })
+      .then(setBalance)
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error('Sui balance request failed:', error)
+          setBalanceError('Your balance is unavailable right now. Try again later.')
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingBalance(false)
+      })
+
+    return () => controller.abort()
+  }, [account?.address, network])
+
+  const setNetwork = (nextNetwork: SuiNetwork) => {
+    dAppKit.switchNetwork(nextNetwork)
+  }
+
+  return (
+    <div className="flex min-h-screen flex-row bg-secondary text-primary">
+      <aside className="sticky top-0 z-30 flex h-screen w-16 shrink-0 flex-col border-r border-secondary bg-primary lg:w-64">
+        <div className="flex items-center justify-center px-sm py-md lg:justify-start lg:px-xl lg:py-xl">
+          <Brand compact />
+        </div>
+        <nav
+          aria-label="Workspace navigation"
+          className="flex flex-1 flex-col items-center gap-xs overflow-y-auto px-sm py-lg lg:items-stretch lg:px-md"
+        >
+          {navigation.map(({ id, label, path, icon: Icon }) => {
+            const active = page === id
+            return (
+              <a
+                key={id}
+                href={path}
+                title={label}
+                aria-current={active ? 'page' : undefined}
+                onClick={(event) => navigate(event, path)}
+                className={`inline-flex min-h-10 w-full items-center justify-center gap-md rounded-lg px-sm py-md text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-focus-ring lg:justify-start lg:px-md ${
+                  active
+                    ? 'bg-utility-brand-50 text-brand-primary'
+                    : 'text-secondary hover:bg-secondary-hover hover:text-primary'
+                }`}
+              >
+                <Icon size={18} className="shrink-0" aria-hidden="true" />
+                <span className="sr-only lg:not-sr-only">{label}</span>
+              </a>
+            )
+          })}
+        </nav>
+        <div className="hidden border-t border-secondary p-lg lg:block">
+          <a
+            href="/"
+            className="inline-flex items-center gap-sm rounded-md px-md py-sm text-xs font-medium text-tertiary hover:bg-secondary-hover hover:text-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            <ArrowLeft size={16} className="shrink-0" aria-hidden="true" />
+            Back to Kharis home
+          </a>
+        </div>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center justify-between gap-md border-b border-secondary bg-primary px-xl py-md lg:justify-end lg:px-3xl">
+          <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-xxs text-xs font-medium capitalize text-utility-brand-700">
+            <span className="size-2 rounded-full bg-current" aria-hidden="true" />
+            Sui {network}
+          </span>
+          <ConnectButton instance={dAppKit} />
+        </div>
+
+        <PageHeader page={page} />
+
+        <main className="flex-1 p-xl lg:p-3xl">
+          <div className="mx-auto max-w-5xl">
+            {page === 'overview' && (
+              <OverviewPage
+                accountAddress={account?.address}
+                balance={balance}
+                balanceError={balanceError}
+                loadingBalance={loadingBalance}
+              />
+            )}
+            {(page === 'vault' || page === 'beneficiaries') && (
+              <VaultManager mode={page} network={network} />
+            )}
+            {page === 'memory' && <WalrusMemory />}
+            {page === 'settings' && <SettingsPage network={network} setNetwork={setNetwork} />}
+          </div>
+        </main>
+
+        <footer className="flex flex-col gap-sm border-t border-secondary bg-primary px-xl py-lg text-xs text-tertiary sm:flex-row sm:items-center sm:justify-between lg:px-3xl">
+          <span>Kharis · Sui {network}</span>
+          <span>Vault actions are for Testnet only.</span>
+        </footer>
+      </div>
+    </div>
+  )
+}
+
+export default function App() {
+  const [pathname, setPathname] = useState(window.location.pathname)
+
+  useEffect(() => {
+    const updatePath = () => setPathname(window.location.pathname)
+    window.addEventListener('popstate', updatePath)
+    return () => window.removeEventListener('popstate', updatePath)
+  }, [])
+
+  if (pathname === '/' || pathname === '/index.html') {
+    return <LandingPage />
+  }
+
+  return <Workspace />
+}

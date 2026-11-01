@@ -17,9 +17,14 @@ import { credentialValues } from './credentials-store.mjs'
 function scrub(body) {
   // credentialValues() covers anything seeded/pushed into creds.json, but a
   // credential can also reach this process directly via the environment
-  // (e.g. local dev exporting TATUM_API_KEY with no creds file mounted) —
+  // (e.g. local dev exporting Tatum keys with no creds file mounted) —
   // include it so that path is still redacted.
-  const secrets = [...credentialValues(), process.env.TATUM_API_KEY].filter(
+  const secrets = [
+    ...credentialValues(),
+    process.env.TATUM_API_KEY,
+    process.env.MAINNET_TATUM_API_KEY,
+    process.env.TESTNET_TATUM_API_KEY,
+  ].filter(
     (v) => typeof v === 'string' && v.length >= 12,
   )
   if (!secrets.length || body == null) return body

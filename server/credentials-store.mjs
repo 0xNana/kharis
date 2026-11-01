@@ -1,7 +1,7 @@
 // Cold-start seed lands here via an init container; a future push mechanism
 // (workspace-bridge -> creds.json) rewrites it in place. Re-applied onto
-// process.env so existing consumers (process.env.TATUM_API_KEY) keep working
-// without a container restart. Directory-watched, not file-watched — an
+// process.env so existing consumers keep working without a container restart.
+// Directory-watched, not file-watched — an
 // atomic rewrite (write-temp + rename) swaps the inode a direct file watch
 // would lose.
 import { readFileSync, watch } from 'node:fs'
